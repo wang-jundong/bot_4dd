@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+recovery/*.jsonl
+*.log
+logs/*.txt
