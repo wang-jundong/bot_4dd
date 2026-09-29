@@ -10,7 +10,6 @@ const MARKET_CAP_MULTIPLIER = 1_000_000;
 export interface ClosedTradePnlInput {
   closedAtMs: number;
   descriptor: PoolDescriptor;
-  isReentryPosition: boolean;
   buyLamports: bigint;
   sellLamports: bigint;
   tokenAmount: bigint;
@@ -21,8 +20,6 @@ export interface ClosedTradePnlInput {
   buySignature?: string;
   sellSignature?: string;
   entryProcessedMs: number;
-  profitLockArmed: boolean;
-  lossStreakAfterClose: number;
 }
 
 export interface PnlRecord {
@@ -34,7 +31,6 @@ export interface PnlRecord {
   venue: string;
   tokenProgram?: string;
   quoteMint?: string;
-  positionType: "normal" | "reentry";
   outcome: "win" | "loss" | "flat";
   buyLamports: string;
   sellLamports: string;
@@ -53,8 +49,6 @@ export interface PnlRecord {
   sellSignature?: string;
   entryProcessedMs: number;
   holdingTimeMs: number;
-  profitLockArmed: boolean;
-  lossStreakAfterClose: number;
   prices: PositionPrices;
 }
 
@@ -72,7 +66,6 @@ export function createPnlRecord(input: ClosedTradePnlInput): PnlRecord {
     venue: input.descriptor.venue,
     tokenProgram: input.descriptor.tokenProgram,
     quoteMint: input.descriptor.quoteMint,
-    positionType: input.isReentryPosition ? "reentry" : "normal",
     outcome: pnlLamports > 0n ? "win" : pnlLamports < 0n ? "loss" : "flat",
     buyLamports: input.buyLamports.toString(),
     sellLamports: input.sellLamports.toString(),
@@ -91,8 +84,6 @@ export function createPnlRecord(input: ClosedTradePnlInput): PnlRecord {
     sellSignature: input.sellSignature,
     entryProcessedMs: input.entryProcessedMs,
     holdingTimeMs: Math.max(0, input.closedAtMs - input.entryProcessedMs),
-    profitLockArmed: input.profitLockArmed,
-    lossStreakAfterClose: input.lossStreakAfterClose,
     prices: { ...input.prices }
   };
 }

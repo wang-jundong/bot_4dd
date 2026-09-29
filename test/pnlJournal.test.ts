@@ -7,26 +7,22 @@ import { createPnlRecord, PnlJournal, type ClosedTradePnlInput } from "../src/pn
 const input = (overrides: Partial<ClosedTradePnlInput> = {}): ClosedTradePnlInput => ({
   closedAtMs: 1_700_000_010_000,
   descriptor: { mint: "mint", pool: "pool", programId: "program", venue: "pump", relevantAccounts: [] },
-  isReentryPosition: false,
   buyLamports: 10_000_000n,
   sellLamports: 12_500_000n,
   tokenAmount: 123n,
   entryPrice: 80e-6,
   exitPrice: 100e-6,
   prices: { entrySignalPrice: 79e-6, actualEntryFillPrice: 80e-6, actualExitFillPrice: 100e-6 },
-  exitReason: "TSR_TP",
+  exitReason: "TAKE_PROFIT",
   buySignature: "buy-signature",
   sellSignature: "sell-signature",
   entryProcessedMs: 1_700_000_000_000,
-  profitLockArmed: false,
-  lossStreakAfterClose: 0,
   ...overrides
 });
 
 describe("PNL journal", () => {
-  it("calculates exact fill PNL and percent for a normal position", () => {
+  it("calculates exact fill PNL and percent for a closed position", () => {
     const record = createPnlRecord(input());
-    expect(record.positionType).toBe("normal");
     expect(record.outcome).toBe("win");
     expect(record.buyLamports).toBe("10000000");
     expect(record.sellLamports).toBe("12500000");
@@ -37,17 +33,15 @@ describe("PNL journal", () => {
     expect(record.holdingTimeMs).toBe(10_000);
   });
 
-  it("records negative PNL and identifies re-entry positions", () => {
-    const record = createPnlRecord(input({ isReentryPosition: true, sellLamports: 8_000_000n, lossStreakAfterClose: 2 }));
-    expect(record.positionType).toBe("reentry");
+  it("records negative PNL", () => {
+    const record = createPnlRecord(input({ sellLamports: 8_000_000n }));
     expect(record.outcome).toBe("loss");
     expect(record.pnlLamports).toBe("-2000000");
     expect(record.pnlPct).toBe(-20);
-    expect(record.lossStreakAfterClose).toBe(2);
   });
 
   it("serializes concurrent appends into one valid JSONL file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tsr-pnl-"));
+    const directory = await mkdtemp(join(tmpdir(), "pnl-"));
     try {
       const journal = new PnlJournal(join(directory, "pnl.jsonl"));
       await Promise.all(Array.from({ length: 20 }, (_, index) => journal.record(input({ descriptor: { mint: `mint-${index}`, pool: "pool", programId: "program", venue: "pump", relevantAccounts: [] } }))));

@@ -6,7 +6,7 @@ import { RecoveryJournal } from "../src/recovery/journal.js";
 
 describe("recovery journal", () => {
   it("persists records in call order and reads bigint values as strings", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tsr-recovery-"));
+    const directory = await mkdtemp(join(tmpdir(), "recovery-"));
     try {
       const journal = new RecoveryJournal(join(directory, "lifecycle.jsonl"));
       journal.record({ event: "buy_sent", amount: 1n });

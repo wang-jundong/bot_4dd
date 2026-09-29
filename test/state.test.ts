@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TokenLifecycleState, assertTransition, canQualifyTargetSell } from "../src/strategy/state.js";
+import { TokenLifecycleState, assertTransition } from "../src/strategy/state.js";
 import { TokenState } from "../src/state/tokenState.js";
 import type { PoolTradeEvent } from "../src/events/types.js";
 import type { PoolDescriptor, VenueAdapter } from "../src/venues/types.js";
@@ -10,25 +10,10 @@ const trade = (signature: string, side: "buy" | "sell", tokenAmount: bigint): Po
   signature, slot: 1, eventIndex: 0, timestampMs: 1, receivedMonoMs: 1, mint: "mint", pool: "pool", programId: "program",
   trader: "target", side, solAmount: 1n, tokenAmount, price: 1, curveProgress: 0.5
 });
+
 describe("state machine", () => {
   it("allows the normal tracking transition", () => expect(() => assertTransition(TokenLifecycleState.TARGET_BUY_DETECTED, TokenLifecycleState.TRACKING_POOL)).not.toThrow());
   it("rejects duplicate/invalid execution transitions", () => expect(() => assertTransition(TokenLifecycleState.BUY_SENT, TokenLifecycleState.BUY_SENT)).toThrow());
-});
-
-describe("target sell routing", () => {
-  it("qualifies target sells only while tracking", () => {
-    expect(canQualifyTargetSell(TokenLifecycleState.TRACKING_POOL)).toBe(true);
-  });
-
-  it.each([
-    TokenLifecycleState.CONFIRMING_REVERSAL,
-    TokenLifecycleState.BUY_PREPARED,
-    TokenLifecycleState.POSITION_ACTIVE_UNCONFIRMED,
-    TokenLifecycleState.POSITION_ACTIVE_CONFIRMED,
-    TokenLifecycleState.SELL_PREPARED
-  ])("keeps %s target sells in position monitoring", lifecycle => {
-    expect(canQualifyTargetSell(lifecycle)).toBe(false);
-  });
 });
 
 describe("target wallet observed balance", () => {

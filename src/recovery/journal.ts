@@ -9,10 +9,6 @@ export interface JournalRecord {
   actualEntrySolAmount?: string;
   buyLamports?: string;
   entryProcessedMs?: number;
-  profitLockArmed?: boolean;
-  isReentryPosition?: boolean;
-  reentryWaitDeadlineMs?: number;
-  postExitLowPrice?: number;
   signature?: string;
   buySignature?: string;
   sellSignature?: string;

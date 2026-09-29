@@ -4,3 +4,7 @@ dist/
 recovery/*.jsonl
 *.log
 logs/*.txt
+logs/*.jsonl
+secrets/
+*.key
+*.bin

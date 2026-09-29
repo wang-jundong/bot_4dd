@@ -7,11 +7,11 @@ fs.mkdirSync(logDirectory, { recursive: true });
 module.exports = {
   apps: [
     {
-      name: "solana-tsr-bot",
+      name: "solana-bot",
       script: "dist/src/index.js",
       cwd: __dirname,
-      // Pin the runtime because pump-sdk 1.36.0's Anchor dependency does not expose BN correctly on Node 20.
-      interpreter: "/home/vibes/.nvm/versions/node/v24.16.0/bin/node",
+      // Pin the runtime because pump-sdk 1.36.0's Anchor dependency does not expose BN correctly on Node 20/22.
+      interpreter: process.env.HOME + "/.nvm/versions/node/v24.21.0/bin/node",
       instances: 1,
       exec_mode: "fork",
       autorestart: true,
