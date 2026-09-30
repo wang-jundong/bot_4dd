@@ -14,6 +14,7 @@ interface SmokeClient {
   ping(count: number): Promise<number>;
   getVersion(): Promise<string>;
   getSlot(commitment?: CommitmentLevel): Promise<string>;
+  _client: { close(): void };
 }
 const YellowstoneClient = (require("@triton-one/yellowstone-grpc") as {
   default: new (endpoint: string, token: string | undefined, options: Record<string, number>) => SmokeClient;
@@ -42,4 +43,6 @@ try {
   const message = error instanceof Error ? error.message : String(error);
   console.error({ ok: false, endpoint, authentication: token ? "x-token configured" : "no token", error: message });
   process.exitCode = 1;
+} finally {
+  client._client.close();
 }

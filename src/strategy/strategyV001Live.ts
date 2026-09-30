@@ -11,6 +11,8 @@ import { lamportsToSol, slippagePctToBps, solToLamportsNumber, toStrategyPrice }
 export class StrategyV001Live implements Strategy {
   readonly #engines = new WeakMap<TokenState, StrategyV001Engine>();
   readonly #busy = new WeakSet<TokenState>();
+  readonly #poolNeeded = new WeakMap<TokenState, boolean>();
+  #poolTape?: (state: TokenState, needed: boolean, fromSlot?: number) => void;
   readonly timerMs: number;
 
   constructor(
@@ -24,6 +26,10 @@ export class StrategyV001Live implements Strategy {
     private readonly logger: Logger
   ) {
     this.timerMs = cfg.timer_ms > 0 ? cfg.timer_ms : 200;
+  }
+
+  setPoolTape(listener: (state: TokenState, needed: boolean, fromSlot?: number) => void): void {
+    this.#poolTape = listener;
   }
 
   onEvent(state: TokenState, event: PoolTradeEvent): void {
@@ -41,6 +47,7 @@ export class StrategyV001Live implements Strategy {
         nowMs: state.targetBuy.timestampMs
       });
       this.#logDecision(state, bind, "gate");
+      this.#syncPool(state, engine, event.slot);
       if (bind.kind === "skip" || engine.isDone) {
         this.#markClosed(state, bind.kind === "skip" ? bind.detail : "gate done");
         return;
@@ -51,18 +58,21 @@ export class StrategyV001Live implements Strategy {
       }
     }
     const decision = engine.onEvent(market, holding);
+    this.#syncPool(state, engine, event.slot);
     void this.#dispatch(state, engine, decision);
   }
 
   onClock(state: TokenState, nowMs = Date.now()): void {
     const engine = this.#engine(state);
     if (!engine || engine.isDone) {
+      if (engine) this.#syncPool(state, engine);
       if (engine?.isDone && !isHolding(state)) this.#markClosed(state, "strategy done");
       return;
     }
     if (!engine.timerWantsTicks()) return;
     const mark = toStrategyPrice(state.prices.currentMarkPrice ?? 0) || engine.lastMarkPx;
     const decision = engine.onTimer(mark, nowMs);
+    this.#syncPool(state, engine);
     void this.#dispatch(state, engine, decision);
   }
 
@@ -70,6 +80,7 @@ export class StrategyV001Live implements Strategy {
     const engine = this.#engines.get(state);
     if (!engine) return;
     engine.onBuyFill(toStrategyPrice(fill.price), Math.floor(Date.now() / 1000), fill.slot);
+    this.#syncPool(state, engine, fill.slot);
   }
 
   onBuyFailed(state: TokenState): void {
@@ -77,6 +88,7 @@ export class StrategyV001Live implements Strategy {
     if (!engine) return;
     engine.onBuyFailed();
     state.resetBuySendClaim();
+    this.#syncPool(state, engine);
     if (engine.isDone) this.#markClosed(state, engine.lastSkip || "buy failed");
   }
 
@@ -84,6 +96,7 @@ export class StrategyV001Live implements Strategy {
     const engine = this.#engines.get(state);
     if (!engine) return { thenBuy: false };
     engine.onSellFill();
+    this.#syncPool(state, engine);
     const thenBuy = engine.pendingThenBuy();
     if (!thenBuy && engine.isDone) this.#markClosed(state, "position closed");
     return { thenBuy };
@@ -106,12 +119,20 @@ export class StrategyV001Live implements Strategy {
       });
     }
     engine.onBuyFill(toStrategyPrice(fillPriceLive), Math.floor(Date.now() / 1000), 0);
+    this.#syncPool(state, engine);
   }
 
   async onThenBuy(state: TokenState): Promise<void> {
     const engine = this.#engines.get(state);
     if (!engine) return;
     await this.#buy(state, engine, engine.lastBuyReason);
+  }
+
+  #syncPool(state: TokenState, engine: StrategyV001Engine, fromSlot?: number): void {
+    const needed = engine.needsPoolTape();
+    if (this.#poolNeeded.get(state) === needed) return;
+    this.#poolNeeded.set(state, needed);
+    this.#poolTape?.(state, needed, needed ? fromSlot : undefined);
   }
 
   #engine(state: TokenState): StrategyV001Engine | undefined {

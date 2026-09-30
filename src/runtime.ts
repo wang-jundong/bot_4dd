@@ -36,6 +36,12 @@ export class TradingRuntime {
     this.#strategy = strategy;
     this.#adapters = new Map(adapters.map(adapter => [adapter.name, adapter]));
     this.execution.bindStrategy(strategy);
+    this.#strategy.setPoolTape?.((state, needed, fromSlot) => {
+      this.#queue = this.#queue.then(async () => {
+        if (needed) await this.#subscribePool(state.descriptor, fromSlot);
+        else await this.#releasePool(state);
+      }).catch(error => this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[02 STREAM] Pool filter update failed"));
+    });
   }
 
   async start(): Promise<void> {
@@ -95,7 +101,7 @@ export class TradingRuntime {
         state = this.#states.create(descriptor, adapter, event);
         state.transition(TokenLifecycleState.TRACKING_POOL);
         state.prices.currentMarkPrice = event.price;
-        await this.#subscribePool(descriptor);
+        await this.#subscribePool(descriptor, event.slot);
         this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, venue: descriptor.venue, signature: event.signature }, "[03 DETECT] Target bought token; now tracking pool");
         this.#strategy.onEvent(state, event);
         if (state.lifecycle === TokenLifecycleState.CLOSED || state.lifecycle === TokenLifecycleState.FAILED) {
@@ -198,13 +204,22 @@ export class TradingRuntime {
     return true;
   }
 
-  async #subscribePool(descriptor: Parameters<VibeClient["subscribePool"]>[0]): Promise<void> {
+  async #subscribePool(descriptor: Parameters<VibeClient["subscribePool"]>[0], fromSlot?: number): Promise<void> {
     const key = `${descriptor.programId}:${descriptor.pool}`;
     if (this.#subscriptions.has(key)) return;
-    this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, venue: descriptor.venue }, "[02 STREAM] Opening pool subscription");
-    const subscription = await this.vibe.subscribePool(descriptor, tx => this.#enqueue(tx));
+    this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, venue: descriptor.venue, fromSlot }, "[02 STREAM] Opening pool subscription");
+    const subscription = await this.vibe.subscribePool(descriptor, tx => this.#enqueue(tx), fromSlot);
     this.#subscriptions.set(key, subscription);
     this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, subscriptions: this.#subscriptions.size }, "[02 STREAM] Pool subscription active");
+  }
+
+  async #releasePool(state: import("./state/tokenState.js").TokenState): Promise<void> {
+    const key = poolKey(state.descriptor);
+    const subscription = this.#subscriptions.get(key);
+    if (!subscription) return;
+    await subscription.close();
+    this.#subscriptions.delete(key);
+    this.logger.info({ mint: state.descriptor.mint, pool: state.descriptor.pool, subscriptions: this.#subscriptions.size }, "[02 STREAM] Released pool from gRPC filter");
   }
 
   async #stopTrackingPool(state: import("./state/tokenState.js").TokenState, reason: string): Promise<void> {

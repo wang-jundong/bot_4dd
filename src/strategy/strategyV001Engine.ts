@@ -102,6 +102,11 @@ export class StrategyV001Engine {
     return this.phase === PHASE_DONE;
   }
 
+  /** Other wallets' prints matter while watching for entry or holding a position. */
+  needsPoolTape(): boolean {
+    return this.phase === PHASE_WATCHING || this.phase === PHASE_HOLDING;
+  }
+
   get lastMarkPx(): number {
     return this._lastMarkPx;
   }

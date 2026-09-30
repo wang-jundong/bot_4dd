@@ -16,6 +16,8 @@ export interface Strategy {
   onSellFill?(state: TokenState): { thenBuy: boolean };
   onThenBuy?(state: TokenState): Promise<void> | void;
   restoreOpenPosition?(state: TokenState, fillPriceLive: number): void;
+  /** `needed` is false once this mint only cares about the target wallet. */
+  setPoolTape?(listener: (state: TokenState, needed: boolean, fromSlot?: number) => void): void;
 }
 
 export class NoOpStrategy implements Strategy {
