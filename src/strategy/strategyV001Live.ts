@@ -22,7 +22,7 @@ export class StrategyV001Live implements Strategy {
     private readonly targetWallet: string,
     private readonly defaultBuySlippageBps: number,
     private readonly defaultSellSlippageBps: number,
-    private readonly canOpenPosition: (state: TokenState) => Promise<boolean>,
+    private readonly canOpenPosition: (state: TokenState) => boolean,
     private readonly logger: Logger
   ) {
     this.timerMs = cfg.timer_ms > 0 ? cfg.timer_ms : 200;
@@ -170,7 +170,7 @@ export class StrategyV001Live implements Strategy {
     if (!state.claimBuySend()) return;
     this.#busy.add(state);
     try {
-      if (!(await this.canOpenPosition(state))) {
+      if (!this.canOpenPosition(state)) {
         state.resetBuySendClaim();
         engine.onBuyFailed();
         this.execution.recordEntryEvent(state, "entry_blocked", { reason });

@@ -96,6 +96,8 @@ export class TradingRuntime {
       this.logger.debug({ signature: event.signature, mint: event.mint, pool: event.pool, venue: descriptor.venue, trader: event.trader, side: event.side, solAmount: event.solAmount, tokenAmount: event.tokenAmount, price: event.price, curveProgress: event.curveProgress }, "[03 DETECT] Trade details");
       const adapter = this.#adapters.get(descriptor.venue);
       if (!adapter) continue;
+      if (event.curve) adapter.noteCurve?.(descriptor.mint, event.curve);
+      if (event.swap) adapter.noteSwap?.(descriptor.mint, event.swap);
       let state = this.#states.get(descriptor);
       if (!state && event.trader === this.config.TARGET_WALLET && event.side === "buy") {
         state = this.#states.create(descriptor, adapter, event);
@@ -185,16 +187,9 @@ export class TradingRuntime {
     }
   }
 
-  async canOpenPosition(candidate: import("./state/tokenState.js").TokenState): Promise<boolean> {
+  canOpenPosition(candidate: import("./state/tokenState.js").TokenState): boolean {
     const blocked = new Set(this.config.BLOCKED_MINTS.split(",").map(value => value.trim()).filter(Boolean));
     if (blocked.has(candidate.descriptor.mint)) { this.logger.warn({ mint: candidate.descriptor.mint }, "[05 ENTRY] Buy blocked: mint denylist"); return false; }
-    const mintAccount = await this.connection.getParsedAccountInfo(new PublicKey(candidate.descriptor.mint), "confirmed");
-    const parsed = mintAccount.value?.data as { parsed?: { info?: { freezeAuthority?: string | null; extensions?: Array<{ extension: string; state?: string }> } } } | undefined;
-    const info = parsed?.parsed?.info;
-    if (info?.freezeAuthority) { this.logger.warn({ mint: candidate.descriptor.mint }, "[05 ENTRY] Buy blocked: freeze authority"); return false; }
-    const dangerous = new Set(["nonTransferable", "transferHook", "permanentDelegate"]);
-    const riskyExtension = info?.extensions?.find(extension => dangerous.has(extension.extension) || (extension.extension === "defaultAccountState" && extension.state === "frozen"));
-    if (riskyExtension) { this.logger.warn({ mint: candidate.descriptor.mint, extension: riskyExtension.extension }, "[05 ENTRY] Buy blocked: risky token extension"); return false; }
     let riskCount = 0;
     for (const state of this.#states.values()) {
       if (state === candidate) continue;
