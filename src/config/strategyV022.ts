@@ -15,20 +15,22 @@ export interface StrategyV022Config {
 
 /**
  * Edit strategy knobs here (replaces scalpingbot config/strategy_v_022.json).
- * A finished round of `buy_hit_count` sells is one hit. Rounds before `buy_hit_round` are skipped.
- * A short round is dropped and the next sells start a new one. A partial sell does not clear the bag.
+ * Train #1 book. Buy is qualifying sell round `buy_hit_round` (2 = the second round)
+ * of `buy_hit_count` sells summing to at least `buy_hit_min`, at a market cap of
+ * `max_mc_sol` or less. Earlier qualifying rounds are skipped. A short round is
+ * dropped and the next sells start a new one. A partial sell does not clear the bag.
  */
 export const STRATEGY_V_022_CONFIG: StrategyV022Config = {
   gate_wallet: "FqamE7xrahg7FEWoByrx1o8SeyHt44rpmE6ZQfT7zrve",
   dust_sol: 0.1,
-  buy_hit_count: 3,
-  buy_hit_min: 1.5,
+  buy_hit_count: 4,
+  buy_hit_min: 1.0,
   buy_hit_round: 2,
   sell_hit_count: 3,
-  sell_hit_min: 4.0,
+  sell_hit_min: 6.0,
   max_mc_sol: 90.0,
   stop_loss: 0.0,
-  take_profit: 0.25,
+  take_profit: 0.15,
   target_sell_exit: true,
   size_sol: 0.4
 };

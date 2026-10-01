@@ -32,19 +32,21 @@ describe("strategy_v_022 engine", () => {
     expect(engine.phaseName).toBe("seek_sell");
     expect(engine.needsPoolTape()).toBe(true);
     expect(engine.onEvent(print({ solAmount: 0.1, signature: "dust" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.6, signature: "s1" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.4, signature: "s1" }))).toBeNull();
     expect(engine.onEvent(print({ side: "BUY", solAmount: 2, signature: "break" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.6, signature: "s2" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.5, signature: "s3" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.5, signature: "s4" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.4, signature: "s2" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.3, signature: "s3" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.3, signature: "s4" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.3, signature: "s5" }))).toBeNull();
     expect(engine.phaseName).toBe("seek_sell");
-    expect(engine.onEvent(print({ solAmount: 0.6, signature: "s5" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.5, signature: "s6" }))).toBeNull();
-    const decision = engine.onEvent(print({ solAmount: 0.5, signature: "s7" }));
+    expect(engine.onEvent(print({ solAmount: 0.4, signature: "s6" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.3, signature: "s7" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.3, signature: "s8" }))).toBeNull();
+    const decision = engine.onEvent(print({ solAmount: 0.3, signature: "s9" }));
     expect(decision).toBe("BUY");
     expect(engine.phaseName).toBe("pending");
     expect(engine.lastBuyReason).toContain("buy_hit");
-    expect(engine.lastBuyDiag.buy_hit_sol).toBe(1.6);
+    expect(engine.lastBuyDiag.buy_hit_sol).toBe(1.3);
   });
 
   it("waits when the buy round is above the market-cap cap", () => {
@@ -67,9 +69,9 @@ describe("strategy_v_022 engine", () => {
     arm(cluster);
     cluster.onBuyFill();
     expect(cluster.phaseName).toBe("hold");
-    cluster.onEvent(print({ side: "BUY", solAmount: 1.5, signature: "b1" }));
-    cluster.onEvent(print({ side: "BUY", solAmount: 1.5, signature: "b2" }));
-    const sold = cluster.onEvent(print({ side: "BUY", solAmount: 1.5, signature: "b3" }));
+    cluster.onEvent(print({ side: "BUY", solAmount: 2, signature: "b1" }));
+    cluster.onEvent(print({ side: "BUY", solAmount: 2, signature: "b2" }));
+    const sold = cluster.onEvent(print({ side: "BUY", solAmount: 2, signature: "b3" }));
     expect(sold).toBe("SELL");
     expect(cluster.lastSellReason).toContain("sell_hit");
     expect(cluster.phaseName).toBe("wait");
@@ -77,7 +79,7 @@ describe("strategy_v_022 engine", () => {
     const tp = bound();
     arm(tp);
     tp.onBuyFill();
-    const took = tp.onEvent(print({ solAmount: 0.05, price: 50e-9 * 1.25, signature: "tp" }));
+    const took = tp.onEvent(print({ solAmount: 0.05, price: 50e-9 * 1.2, signature: "tp" }));
     expect(took).toBe("SELL");
     expect(tp.lastSellReason).toBe("take_profit");
 
@@ -103,7 +105,8 @@ describe("strategy_v_022 engine", () => {
     expect(engine.onEvent(print({ side: "BUY", wallet: "me", solAmount: 3, signature: "my-buy" }))).toBeNull();
     engine.onEvent(print({ solAmount: 0.6, signature: "s2" }));
     expect(engine.onEvent(print({ wallet: "me", solAmount: 2, signature: "my-sell" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.6, signature: "s3" }))).toBe("BUY");
+    engine.onEvent(print({ solAmount: 0.6, signature: "s3" }));
+    expect(engine.onEvent(print({ solAmount: 0.6, signature: "s4" }))).toBe("BUY");
     engine.onBuyFill();
     engine.onEvent(print({ side: "BUY", solAmount: 2, signature: "b1" }));
     expect(engine.onEvent(print({ side: "BUY", wallet: "me", solAmount: 3, signature: "my-exit-buy" }))).toBeNull();
@@ -153,6 +156,7 @@ describe("strategy_v_022 engine", () => {
     expect(seek.onEvent(print({ side: "SELL", wallet: "target", solAmount: 0.6, tokenAmount: 100, signature: "partial" }))).toBeNull();
     expect(seek.phaseName).toBe("seek_sell");
     expect(seek.onEvent(print({ solAmount: 0.6, signature: "s3" }))).toBeNull();
+    expect(seek.onEvent(print({ solAmount: 0.6, signature: "s4" }))).toBeNull();
     expect(roundOfSells(seek, "second")).toBe("BUY");
 
     const pending = new StrategyV022Engine(cfg({ take_profit: 0 }));
@@ -178,16 +182,18 @@ describe("strategy_v_022 engine", () => {
 
   it("drops a short sell round and buys on the second full round", () => {
     const engine = bound();
-    expect(engine.onEvent(print({ solAmount: 0.4, signature: "short-1" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.4, signature: "short-2" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.4, signature: "short-3" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.8, signature: "not-slid" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.2, signature: "short-1" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.2, signature: "short-2" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.2, signature: "short-3" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.2, signature: "short-4" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.4, signature: "not-slid" }))).toBeNull();
     expect(engine.phaseName).toBe("seek_sell");
-    expect(engine.onEvent(print({ solAmount: 0.8, signature: "q1-2" }))).toBeNull();
-    expect(engine.onEvent(print({ solAmount: 0.8, signature: "q1-3" }))).toBeNull();
-    const decision = roundOfSells(engine, "q2", undefined, 0.5);
+    expect(engine.onEvent(print({ solAmount: 0.4, signature: "q1-2" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.4, signature: "q1-3" }))).toBeNull();
+    expect(engine.onEvent(print({ solAmount: 0.4, signature: "q1-4" }))).toBeNull();
+    const decision = roundOfSells(engine, "q2", undefined, 0.4);
     expect(decision).toBe("BUY");
-    expect(engine.lastBuyDiag.buy_hit_sol).toBe(1.5);
+    expect(engine.lastBuyDiag.buy_hit_sol).toBe(1.6);
     expect(engine.phaseName).toBe("pending");
   });
 
@@ -200,8 +206,8 @@ describe("strategy_v_022 engine", () => {
     expect(engine.onEvent(print({ side: "BUY", solAmount: 1, signature: "b3" }))).toBeNull();
     expect(engine.onEvent(print({ side: "BUY", solAmount: 2, signature: "b4" }))).toBeNull();
     expect(engine.phaseName).toBe("hold");
-    engine.onEvent(print({ side: "BUY", solAmount: 1, signature: "b5" }));
-    const sold = engine.onEvent(print({ side: "BUY", solAmount: 1, signature: "b6" }));
+    engine.onEvent(print({ side: "BUY", solAmount: 2, signature: "b5" }));
+    const sold = engine.onEvent(print({ side: "BUY", solAmount: 2, signature: "b6" }));
     expect(sold).toBe("SELL");
     expect(engine.lastSellReason).toContain("sell_hit");
     expect(engine.phaseName).toBe("wait");
@@ -211,8 +217,8 @@ describe("strategy_v_022 engine", () => {
     const engine = bound({ sell_hit_count: 2 });
     arm(engine);
     engine.onBuyFill();
-    expect(engine.onEvent(print({ side: "BUY", solAmount: 2, signature: "b1" }))).toBeNull();
-    expect(engine.onEvent(print({ side: "BUY", solAmount: 2, signature: "b2" }))).toBe("SELL");
+    expect(engine.onEvent(print({ side: "BUY", solAmount: 3, signature: "b1" }))).toBeNull();
+    expect(engine.onEvent(print({ side: "BUY", solAmount: 3, signature: "b2" }))).toBe("SELL");
   });
 
   it("treats a zero hit count as a window of one", () => {
@@ -250,7 +256,8 @@ function roundOfSells(engine: StrategyV022Engine, tag: string, price?: number, s
   const priced = price === undefined ? {} : { price };
   engine.onEvent(print({ solAmount, ...priced, signature: `${tag}-1` }));
   engine.onEvent(print({ solAmount, ...priced, signature: `${tag}-2` }));
-  return engine.onEvent(print({ solAmount, ...priced, signature: `${tag}-3` }));
+  engine.onEvent(print({ solAmount, ...priced, signature: `${tag}-3` }));
+  return engine.onEvent(print({ solAmount, ...priced, signature: `${tag}-4` }));
 }
 
 function arm(engine: StrategyV022Engine): void {

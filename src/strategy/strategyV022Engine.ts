@@ -1,5 +1,5 @@
 /**
- * strategy_v_022 — round-window second sell-hit, then a buy-run exit.
+ * strategy_v_022 — round-window sell-hit, then a buy-run exit.
  *
  * Faithful port of scalpingbot Strategy. One instance per mint.
  * After bind (the target's first buy), a finished round is `buy_hit_count` sells
