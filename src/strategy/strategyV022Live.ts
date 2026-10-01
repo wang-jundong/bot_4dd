@@ -51,10 +51,10 @@ export class StrategyV022Live implements Strategy {
 
   onClock(): void {}
 
-  onBuyFill(state: TokenState): void {
+  onBuyFill(state: TokenState, fill?: { price: number; slot: number }): void {
     const engine = this.#engines.get(state);
     if (!engine) return;
-    engine.onBuyFill();
+    engine.onBuyFill(toStrategyPrice(fill?.price ?? 0));
     if (this.#sellAfterFill.has(state)) engine.applyMissedTargetSell();
     this.#syncPool(state, engine);
   }

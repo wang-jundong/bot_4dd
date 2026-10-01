@@ -5,6 +5,7 @@ import {
 } from "@solana/web3.js";
 import { createAssociatedTokenAccountIdempotentInstruction, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
+  bondingCurveV2Pda, creatorVaultPda,
   getPumpAmmProgram, getPumpProgram,
   PUMP_AMM_PROGRAM_ID, PUMP_PROGRAM_ID, PUMP_SDK
 } from "@pump-fun/pump-sdk";
@@ -15,16 +16,29 @@ import type {
   PreparedTradeTransaction, VenueAdapter
 } from "./types.js";
 
+/** Tokens out for `buy_exact_sol_in`: fees come out of `spendableSolIn`, then the curve quote. */
 function quoteBuyTokens(solAmount: BN, curve: PumpCurveSnapshot): BN {
   if (solAmount.isZero()) return new BN(0);
   const virtualToken = new BN(curve.virtualTokenReserves.toString());
   if (virtualToken.isZero()) return new BN(0);
-  const creatorFee = curve.creator === PublicKey.default.toBase58() ? 0n : curve.creatorFeeBps;
-  const totalFeeBps = new BN((curve.protocolFeeBps + creatorFee).toString());
-  const inputAmount = solAmount.subn(1).muln(10_000).div(totalFeeBps.addn(10_000));
-  const tokens = inputAmount.mul(virtualToken).div(new BN(curve.virtualQuoteReserves.toString()).add(inputAmount));
+  const creatorFeeBps = curve.creator === PublicKey.default.toBase58() ? 0n : curve.creatorFeeBps;
+  const totalFeeBps = new BN((curve.protocolFeeBps + creatorFeeBps).toString());
+  let netSol = solAmount.muln(10_000).div(totalFeeBps.addn(10_000));
+  const fees = ceilFee(netSol, curve.protocolFeeBps).add(creatorFeeBps === 0n ? new BN(0) : ceilFee(netSol, creatorFeeBps));
+  const over = netSol.add(fees).sub(solAmount);
+  if (over.gtn(0)) netSol = netSol.sub(over);
+  if (netSol.lten(1)) return new BN(0);
+  const net = netSol.subn(1);
+  const tokens = net.mul(virtualToken).div(new BN(curve.virtualQuoteReserves.toString()).add(net));
   const realToken = new BN(curve.realTokenReserves.toString());
   return tokens.lt(realToken) ? tokens : realToken;
+}
+
+function minTokensOut(quoted: BN, slippageBps: number): BN {
+  const slippage = slippageBps / 100;
+  const haircut = quoted.muln(Math.floor(slippage * 10)).divn(1_000);
+  const min = quoted.sub(haircut);
+  return min.isNeg() ? new BN(0) : min;
 }
 
 function quoteSellSol(tokenAmount: BN, curve: PumpCurveSnapshot): BN {
@@ -154,21 +168,26 @@ export class PumpBondingCurveAdapter extends PumpAdapterBase {
     const mint = new PublicKey(descriptor.mint);
     if (!descriptor.tokenProgram) throw new Error(`token program missing for ${descriptor.mint}`);
     const tokenProgram = new PublicKey(descriptor.tokenProgram);
-    const solAmount = new BN(lamports.toString());
-    const slippage = slippageBps / 100;
-    const maxSol = solAmount.add(solAmount.muln(Math.floor(slippage * 10)).divn(1_000));
+    const spendable = new BN(lamports.toString());
     const associatedUser = getAssociatedTokenAddressSync(mint, owner, true, tokenProgram);
+    const buy = await this.#program.methods
+      .buyExactSolIn(spendable, minTokensOut(quoteBuyTokens(spendable, curve), slippageBps), { 0: true })
+      .accountsPartial({
+        feeRecipient: curve.feeRecipient ? new PublicKey(curve.feeRecipient) : feeRecipient(),
+        mint,
+        associatedUser,
+        user: owner,
+        creatorVault: creatorVaultPda(new PublicKey(curve.creator)),
+        tokenProgram
+      })
+      .remainingAccounts([
+        { pubkey: bondingCurveV2Pda(mint), isWritable: false, isSigner: false },
+        { pubkey: buybackFeeRecipient(), isWritable: true, isSigner: false }
+      ])
+      .instruction();
     const instructions = [
       createAssociatedTokenAccountIdempotentInstruction(owner, associatedUser, owner, mint, tokenProgram),
-      await PUMP_SDK.getBuyInstructionRaw({
-        user: owner,
-        mint,
-        creator: new PublicKey(curve.creator),
-        amount: quoteBuyTokens(solAmount, curve),
-        solAmount: maxSol,
-        tokenProgram,
-        ...(curve.feeRecipient ? { feeRecipient: new PublicKey(curve.feeRecipient) } : {})
-      } as Parameters<typeof PUMP_SDK.getBuyInstructionRaw>[0])
+      buy
     ];
     return this.prepared(instructions, owner);
   }
@@ -284,6 +303,36 @@ function quoteAmmSell(base: BN, swap: PumpSwapSnapshot, slippageBps: number): BN
   const net = quoteOut.sub(ceilFee(quoteOut, swap.lpFeeBps)).sub(ceilFee(quoteOut, swap.protocolFeeBps)).sub(creatorFee === 0n ? new BN(0) : ceilFee(quoteOut, creatorFee));
   if (net.isNeg()) return new BN(0);
   return net.mul(slippageFactor(slippageBps, false)).div(new BN(1_000_000_000));
+}
+
+const FEE_RECIPIENTS = [
+  "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+  "7VtfL8fvgNfhz17qKRMjzQEXgbdpnHHHQRh54R9jP2RJ",
+  "7hTckgnGnLQR6sdH7YkqFTAA7VwTfYFaZ6EhEsU3saCX",
+  "9rPYyANsfQZw3DnDmKE3YCQF5E8oD89UXoHn9JFEhJUz",
+  "AVmoTthdrX6tKt4nDjco2D775W2YK3sDhxPcMmzUAmTY",
+  "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM",
+  "FWsW1xNtWscwNmKv6wVsU1iTzRN6wmmk3MjxRP5tT7hz",
+  "G5UZAVbAf46s7cKWoyKu8kYTip9DGTpbLZ2qa9Aq69dP"
+];
+
+const BUYBACK_FEE_RECIPIENTS = [
+  "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD",
+  "9M4giFFMxmFGXtc3feFzRai56WbBqehoSeRE5GK7gf7",
+  "GXPFM2caqTtQYC2cJ5yJRi9VDkpsYZXzYdwYpGnLmtDL",
+  "3BpXnfJaUTiwXnJNe7Ej1rcbzqTTQUvLShZaWazebsVR",
+  "5cjcW9wExnJJiqgLjq7DEG75Pm6JBgE1hNv4B2vHXUW6",
+  "EHAAiTxcdDwQ3U4bU6YcMsQGaekdzLS3B5SmYo46kJtL",
+  "5eHhjP8JaYkz83CWwvGU2uMUXefd3AazWGx4gpcuEEYD",
+  "A7hAgCzFw14fejgCp387JUJRMNyz4j89JKnhtKU8piqW"
+];
+
+function feeRecipient(): PublicKey {
+  return new PublicKey(FEE_RECIPIENTS[Math.floor(Math.random() * FEE_RECIPIENTS.length)]!);
+}
+
+function buybackFeeRecipient(): PublicKey {
+  return new PublicKey(BUYBACK_FEE_RECIPIENTS[Math.floor(Math.random() * BUYBACK_FEE_RECIPIENTS.length)]!);
 }
 
 function slippageFactor(slippageBps: number, up: boolean): BN {

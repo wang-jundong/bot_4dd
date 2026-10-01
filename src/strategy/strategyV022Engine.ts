@@ -68,6 +68,7 @@ interface FlowState {
   hits: number;
   hitSol: number;
   exitSol: number;
+  /** Sell-print price that fired the buy, then the confirmed fill once that lands. */
   entryPx: number;
   targetTokens: number;
   /** Last target buy that opened or added to the bag. */
@@ -176,7 +177,9 @@ export class StrategyV022Engine {
     this.buyDiag = {};
   }
 
-  onBuyFill(): void {
+  /** `fillPx` is the confirmed buy, in strategy SOL/token. It replaces the sell print as the take-profit baseline. */
+  onBuyFill(fillPx = 0): void {
+    if (fillPx > 0) this.st.entryPx = fillPx;
     this.commitBuy(true);
   }
 

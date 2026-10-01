@@ -78,8 +78,10 @@ describe("strategy_v_022 engine", () => {
 
     const tp = bound();
     arm(tp);
-    tp.onBuyFill();
-    const took = tp.onEvent(print({ solAmount: 0.05, price: 50e-9 * 1.2, signature: "tp" }));
+    const fill = 50e-9 * 1.1;
+    tp.onBuyFill(fill);
+    expect(tp.onEvent(print({ solAmount: 0.05, price: 50e-9 * 1.2, signature: "under-fill" }))).toBeNull();
+    const took = tp.onEvent(print({ solAmount: 0.05, price: fill * 1.2, signature: "tp" }));
     expect(took).toBe("SELL");
     expect(tp.lastSellReason).toBe("take_profit");
 
