@@ -28,6 +28,12 @@ const YellowstoneClient = (require("@triton-one/yellowstone-grpc") as {
 const RECONNECT_MS = 2_000;
 const IDLE_MS = 300_000;
 
+function isReplayOutOfRange(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return code === 11 || (typeof message === "string" && /\bOUT_OF_RANGE\b/.test(message));
+}
+
 export class YellowstoneVibeClient implements VibeClient {
   readonly #client: YellowstoneClientApi;
   readonly #handlers = new Map<string, Set<(tx: ParsedTargetTransaction) => void>>();
@@ -41,8 +47,8 @@ export class YellowstoneVibeClient implements VibeClient {
   /** Next filter write replays from this slot, then clears it. Ping writes do not. */
   #replayFromSlot?: number;
 
-  constructor(options: VibeConnectionOptions, private readonly onError: (error: unknown) => void = console.error) {
-    this.#client = new YellowstoneClient(options.endpoint, options.token || undefined, {
+  constructor(options: VibeConnectionOptions, private readonly onError: (error: unknown) => void = console.error, client?: YellowstoneClientApi) {
+    this.#client = client ?? new YellowstoneClient(options.endpoint, options.token || undefined, {
       "grpc.max_receive_message_length": 16 * 1024 * 1024,
       "grpc.keepalive_time_ms": 20_000,
       "grpc.keepalive_timeout_ms": 10_000,
@@ -123,7 +129,13 @@ export class YellowstoneVibeClient implements VibeClient {
       if (this.#stream !== stream) return;
       this.#stream = undefined;
       this.#clearIdle();
-      this.#armReplay(this.#lastSlot);
+      if (isReplayOutOfRange(error)) {
+        // Vibe rejected this replay slot asynchronously. Retrying it would loop forever.
+        this.#replayFromSlot = undefined;
+        this.#lastSlot = 0;
+      } else {
+        this.#armReplay(this.#lastSlot);
+      }
       if (error) this.onError(error);
       this.#scheduleReconnect();
     };
@@ -174,6 +186,7 @@ export class YellowstoneVibeClient implements VibeClient {
       await this.#write(stream, this.#request(fromSlot, ping));
     } catch (error) {
       if (!fromSlot) throw error;
+      if (isReplayOutOfRange(error)) this.#lastSlot = 0;
       this.onError(error);
       await this.#write(stream, this.#request(undefined, ping));
     }
