@@ -24,6 +24,7 @@ interface StrategySlot {
   states: TokenStateManager;
   poolNeeded: Map<string, boolean>;
   buyAmountLamports: bigint;
+  targetWallet: string;
 }
 
 interface RecoveredOpen {
@@ -55,7 +56,7 @@ export class TradingRuntime {
     private readonly decoder: PumpTradeDecoder,
     adapters: readonly VenueAdapter[],
     private readonly logger: Logger,
-    strategies: readonly { name: string; strategy: Strategy; buyAmountLamports: bigint }[]
+    strategies: readonly { name: string; strategy: Strategy; buyAmountLamports: bigint; targetWallet: string }[]
   ) {
     this.#adapters = new Map(adapters.map(adapter => [adapter.name, adapter]));
     this.#slots = strategies.map(entry => ({
@@ -63,7 +64,8 @@ export class TradingRuntime {
       strategy: entry.strategy,
       states: new TokenStateManager(config.EVENT_RETENTION_SEC * 1000),
       poolNeeded: new Map(),
-      buyAmountLamports: entry.buyAmountLamports
+      buyAmountLamports: entry.buyAmountLamports,
+      targetWallet: entry.targetWallet
     }));
     for (const slot of this.#slots) {
       slot.strategy.setPoolTape?.((state, needed, fromSlot) => {
@@ -80,10 +82,13 @@ export class TradingRuntime {
     await this.vibe.connect();
     this.logger.info("[02 STREAM] Vibe client initialized");
     await this.#recoverPositions();
-    this.logger.info({ targetWallet: this.config.TARGET_WALLET }, "[02 STREAM] Opening target-wallet subscription");
-    const wallet = await this.vibe.subscribeWallet(this.config.TARGET_WALLET, tx => this.#enqueue(tx));
-    this.#subscriptions.set("wallet", wallet);
-    this.logger.info({ targetWallet: this.config.TARGET_WALLET }, "[02 STREAM] Target-wallet subscription active");
+    const targetWallets = [...new Set(this.#slots.map(slot => slot.targetWallet))];
+    for (const targetWallet of targetWallets) {
+      this.logger.info({ targetWallet }, "[02 STREAM] Opening target-wallet subscription");
+      const wallet = await this.vibe.subscribeWallet(targetWallet, tx => this.#enqueue(tx));
+      this.#subscriptions.set(`wallet:${targetWallet}`, wallet);
+      this.logger.info({ targetWallet }, "[02 STREAM] Target-wallet subscription active");
+    }
     const tickMs = Math.max(50, Math.min(...this.#slots.map(slot => slot.strategy.timerMs || 200)));
     this.#positionTimer = setInterval(() => {
       this.#queue = this.#queue.then(async () => {
@@ -116,7 +121,7 @@ export class TradingRuntime {
         strategies
       }, "[HEALTH] Bot is running");
     }, 30_000);
-    this.logger.info({ targetWallet: this.config.TARGET_WALLET, strategy: this.config.strategy, strategies: this.#slots.map(slot => slot.name), timerMs: tickMs }, "[01 STARTUP] Trading runtime started");
+    this.logger.info({ targets: this.#slots.map(slot => ({ strategy: slot.name, targetWallet: slot.targetWallet })), strategy: this.config.strategy, timerMs: tickMs }, "[01 STARTUP] Trading runtime started");
   }
 
   #enqueue(tx: Parameters<PumpTradeDecoder["decode"]>[0]): void {
@@ -138,15 +143,15 @@ export class TradingRuntime {
       if (!adapter) continue;
       if (event.curve) adapter.noteCurve?.(descriptor.mint, event.curve);
       if (event.swap) adapter.noteSwap?.(descriptor.mint, event.swap);
-      let created = false;
-      for (const slot of this.#slots) created = this.#apply(slot, descriptor, adapter, event) || created;
-      if (created) this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, venue: descriptor.venue, signature: event.signature, strategies: this.#slots.map(slot => slot.name) }, "[03 DETECT] Target bought token; now tracking pool");
+      const created: string[] = [];
+      for (const slot of this.#slots) if (this.#apply(slot, descriptor, adapter, event)) created.push(slot.name);
+      if (created.length) this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, venue: descriptor.venue, signature: event.signature, strategies: created }, "[03 DETECT] Target bought token; now tracking pool");
     }
   }
 
   #apply(slot: StrategySlot, descriptor: Parameters<VibeClient["subscribePool"]>[0], adapter: VenueAdapter, event: Parameters<Strategy["onEvent"]>[1]): boolean {
     let state = slot.states.get(descriptor);
-    if (!state && event.trader === this.config.TARGET_WALLET && event.side === "buy") {
+    if (!state && event.trader === slot.targetWallet && event.side === "buy") {
       state = slot.states.create(descriptor, adapter, event);
       this.#owner.set(state, slot);
       slot.poolNeeded.set(poolKey(descriptor), true);
@@ -158,7 +163,7 @@ export class TradingRuntime {
       return true;
     }
     if (!state) return false;
-    if (event.trader === this.config.TARGET_WALLET) state.recordTargetTrade(event);
+    if (event.trader === slot.targetWallet) state.recordTargetTrade(event);
     if (!state.events.add(event)) return false;
     state.prices.currentMarkPrice = event.price;
     slot.strategy.onEvent(state, event);
@@ -262,7 +267,7 @@ export class TradingRuntime {
       mint: descriptor.mint,
       pool: descriptor.pool,
       programId: descriptor.programId,
-      trader: this.config.TARGET_WALLET,
+      trader: open.slot.targetWallet,
       side: "buy" as const,
       solAmount: 0n,
       tokenAmount,

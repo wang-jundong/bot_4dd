@@ -1,4 +1,5 @@
 export interface StrategyV011Config {
+  gate_wallet: string;
   clip_lo: number;
   clip_hi: number;
   min_mc_sol: number;
@@ -36,6 +37,7 @@ export interface StrategyV011Config {
 
 /** Edit strategy knobs here (replaces config/strategy_v_011.json). */
 export const STRATEGY_V_011_CONFIG: StrategyV011Config = {
+  gate_wallet: "4DdrfiDHpmx55i4SPssxVzS9ZaKLb8qr45NKY9Er9nNh",
   clip_lo: 2.2,
   clip_hi: 4.8,
   min_mc_sol: 20,

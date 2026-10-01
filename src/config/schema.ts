@@ -6,7 +6,6 @@ const bool = z.enum(["true", "false"]).transform(v => v === "true");
 
 export const envSchema = z.object({
   EXECUTION_MODE: z.literal("live").default("live"),
-  TARGET_WALLET: z.string().min(32),
   BLOCKED_MINTS: z.string().default(""),
   VIBE_GRPC_ENDPOINT: z.string().min(1),
   VIBE_GRPC_TOKEN: z.string().min(1),

@@ -1,4 +1,5 @@
 export interface StrategyV022Config {
+  gate_wallet: string;
   dust_sol: number;
   buy_hit_count: number;
   buy_hit_min: number;
@@ -16,9 +17,9 @@ export interface StrategyV022Config {
  * Edit strategy knobs here (replaces scalpingbot config/strategy_v_022.json).
  * A finished round of `buy_hit_count` sells is one hit. Rounds before `buy_hit_round` are skipped.
  * A short round is dropped and the next sells start a new one. A partial sell does not clear the bag.
- * The target wallet is TARGET_WALLET, not the JSON gate_wallet.
  */
 export const STRATEGY_V_022_CONFIG: StrategyV022Config = {
+  gate_wallet: "FqamE7xrahg7FEWoByrx1o8SeyHt44rpmE6ZQfT7zrve",
   dust_sol: 0.1,
   buy_hit_count: 3,
   buy_hit_min: 1.5,

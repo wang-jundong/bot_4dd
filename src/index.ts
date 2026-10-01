@@ -57,15 +57,16 @@ const strategies = config.strategyPlans.map(plan => {
     mintTrades
   );
   const strategy: Strategy = plan.name === "strategy_v_022"
-    ? new StrategyV022Live(config.strategyV022, execution, config.keypair, config.TARGET_WALLET, config.buySlippageBps, config.sellSlippageBps, canOpen, logger)
-    : new StrategyV011Live(config.strategyV011, execution, config.keypair, config.TARGET_WALLET, config.buySlippageBps, config.sellSlippageBps, canOpen, logger);
+    ? new StrategyV022Live(config.strategyV022, execution, config.keypair, plan.targetWallet, config.buySlippageBps, config.sellSlippageBps, canOpen, logger)
+    : new StrategyV011Live(config.strategyV011, execution, config.keypair, plan.targetWallet, config.buySlippageBps, config.sellSlippageBps, canOpen, logger);
   execution.bindStrategy(strategy);
-  return { name: plan.name, strategy, buyAmountLamports: plan.buyAmountLamports };
+  return { name: plan.name, strategy, buyAmountLamports: plan.buyAmountLamports, targetWallet: plan.targetWallet };
 });
 runtime = new TradingRuntime(config, connection, vibe, journal, new PumpTradeDecoder(connection), adapters, logger, strategies);
 
 const strategyKnobs = Object.fromEntries(config.strategyPlans.map(plan => [plan.name, plan.name === "strategy_v_022"
   ? {
+      targetWallet: config.strategyV022.gate_wallet,
       sizeSol: config.strategyV022.size_sol,
       dustSol: config.strategyV022.dust_sol,
       buyHitCount: config.strategyV022.buy_hit_count,
@@ -79,6 +80,7 @@ const strategyKnobs = Object.fromEntries(config.strategyPlans.map(plan => [plan.
       targetSellExit: config.strategyV022.target_sell_exit
     }
   : {
+      targetWallet: config.strategyV011.gate_wallet,
       rule1SizeSol: config.strategyV011.rule_1_size_sol,
       rule2Enabled: config.strategyV011.rule_2_enabled,
       clip: [config.strategyV011.clip_lo, config.strategyV011.clip_hi],
@@ -89,7 +91,6 @@ const strategyKnobs = Object.fromEntries(config.strategyPlans.map(plan => [plan.
 
 logger.info({
   strategy: config.strategy,
-  targetWallet: config.TARGET_WALLET,
   executionMode: config.EXECUTION_MODE,
   ...strategyKnobs,
   pnlPath: config.PNL_PATH,
