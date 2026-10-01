@@ -5,14 +5,40 @@ import type { Subscription, VibeClient } from "./grpc/vibeClient.js";
 import type { Strategy } from "./strategy/types.js";
 import { TokenLifecycleState } from "./strategy/state.js";
 import { poolKey, TokenStateManager } from "./state/tokenStateManager.js";
+import type { TokenState } from "./state/tokenState.js";
 import type { VenueAdapter } from "./venues/types.js";
 import { PumpTradeDecoder } from "./venues/tradeDecoder.js";
-import type { LiveStrategyExecution } from "./execution/liveExecution.js";
+import type { JournalRecord } from "./recovery/journal.js";
 import type { RecoveryJournal } from "./recovery/journal.js";
+import { allocateRecoveredTokens } from "./recovery/recoveredTokens.js";
+
+/** Untagged records belong to the first active strategy, so one wallet bag is not restored twice. */
+export function journalRecordMatchesStrategy(recordStrategy: string | undefined, slotName: string, activeNames: readonly string[]): boolean {
+  if (recordStrategy) return recordStrategy === slotName;
+  return activeNames[0] === slotName;
+}
+
+interface StrategySlot {
+  name: string;
+  strategy: Strategy;
+  states: TokenStateManager;
+  poolNeeded: Map<string, boolean>;
+  buyAmountLamports: bigint;
+}
+
+interface RecoveredOpen {
+  slot: StrategySlot;
+  record: JournalRecord;
+  recordedAmount: bigint;
+  entryPrice: number;
+  entrySolAmount?: string;
+  buySignature?: string;
+  warnUntagged: boolean;
+}
 
 export class TradingRuntime {
-  readonly #states: TokenStateManager;
-  readonly #strategy: Strategy;
+  readonly #slots: StrategySlot[];
+  readonly #owner = new WeakMap<TokenState, StrategySlot>();
   readonly #adapters: ReadonlyMap<string, VenueAdapter>;
   readonly #subscriptions = new Map<string, Subscription>();
   #queue: Promise<void> = Promise.resolve();
@@ -28,20 +54,25 @@ export class TradingRuntime {
     private readonly journal: RecoveryJournal,
     private readonly decoder: PumpTradeDecoder,
     adapters: readonly VenueAdapter[],
-    private readonly execution: LiveStrategyExecution,
     private readonly logger: Logger,
-    strategy: Strategy
+    strategies: readonly { name: string; strategy: Strategy; buyAmountLamports: bigint }[]
   ) {
-    this.#states = new TokenStateManager(config.EVENT_RETENTION_SEC * 1000);
-    this.#strategy = strategy;
     this.#adapters = new Map(adapters.map(adapter => [adapter.name, adapter]));
-    this.execution.bindStrategy(strategy);
-    this.#strategy.setPoolTape?.((state, needed, fromSlot) => {
-      this.#queue = this.#queue.then(async () => {
-        if (needed) await this.#subscribePool(state.descriptor, fromSlot);
-        else await this.#releasePool(state);
-      }).catch(error => this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[02 STREAM] Pool filter update failed"));
-    });
+    this.#slots = strategies.map(entry => ({
+      name: entry.name,
+      strategy: entry.strategy,
+      states: new TokenStateManager(config.EVENT_RETENTION_SEC * 1000),
+      poolNeeded: new Map(),
+      buyAmountLamports: entry.buyAmountLamports
+    }));
+    for (const slot of this.#slots) {
+      slot.strategy.setPoolTape?.((state, needed, fromSlot) => {
+        const owner = this.#owner.get(state);
+        if (!owner) return;
+        owner.poolNeeded.set(poolKey(state.descriptor), needed);
+        this.#queueSync(state.descriptor, needed ? fromSlot : undefined);
+      });
+    }
   }
 
   async start(): Promise<void> {
@@ -53,30 +84,39 @@ export class TradingRuntime {
     const wallet = await this.vibe.subscribeWallet(this.config.TARGET_WALLET, tx => this.#enqueue(tx));
     this.#subscriptions.set("wallet", wallet);
     this.logger.info({ targetWallet: this.config.TARGET_WALLET }, "[02 STREAM] Target-wallet subscription active");
-    const tickMs = Math.max(50, this.#strategy.timerMs || 200);
+    const tickMs = Math.max(50, Math.min(...this.#slots.map(slot => slot.strategy.timerMs || 200)));
     this.#positionTimer = setInterval(() => {
       this.#queue = this.#queue.then(async () => {
         const now = Date.now();
-        for (const state of [...this.#states.values()]) {
-          if (state.lifecycle === TokenLifecycleState.CLOSED || state.lifecycle === TokenLifecycleState.FAILED) {
-            await this.#stopTrackingPool(state, state.lifecycle === TokenLifecycleState.CLOSED ? "position closed" : "failed");
-            continue;
+        for (const slot of this.#slots) {
+          for (const state of [...slot.states.values()]) {
+            if (this.#isTerminal(state)) {
+              this.#dropState(slot, state, state.lifecycle === TokenLifecycleState.CLOSED ? "position closed" : "failed");
+              continue;
+            }
+            slot.strategy.onClock(state, now);
+            if (this.#isTerminal(state)) this.#dropState(slot, state, state.lifecycle === TokenLifecycleState.CLOSED ? "position closed" : "failed");
           }
-          this.#strategy.onClock(state, now);
         }
       }).catch(error => this.logger.error({ err: error instanceof Error ? error.message : String(error) }, "[ERROR] Position maintenance failed"));
     }, tickMs);
     this.#healthTimer = setInterval(() => {
-      const states = [...this.#states.values()];
+      const strategies = this.#slots.map(slot => {
+        const states = [...slot.states.values()];
+        return {
+          name: slot.name,
+          trackedTokens: states.length,
+          lifecycles: states.reduce<Record<string, number>>((counts, state) => { counts[state.lifecycle] = (counts[state.lifecycle] ?? 0) + 1; return counts; }, {})
+        };
+      });
       this.logger.info({
         receivedTransactions: this.#receivedTransactions,
         decodedEvents: this.#decodedEvents,
         subscriptions: this.#subscriptions.size,
-        trackedTokens: states.length,
-        lifecycles: states.reduce<Record<string, number>>((counts, state) => { counts[state.lifecycle] = (counts[state.lifecycle] ?? 0) + 1; return counts; }, {})
+        strategies
       }, "[HEALTH] Bot is running");
     }, 30_000);
-    this.logger.info({ targetWallet: this.config.TARGET_WALLET, strategy: this.config.STRATEGY, timerMs: tickMs }, "[01 STARTUP] Trading runtime started");
+    this.logger.info({ targetWallet: this.config.TARGET_WALLET, strategy: this.config.strategy, strategies: this.#slots.map(slot => slot.name), timerMs: tickMs }, "[01 STARTUP] Trading runtime started");
   }
 
   #enqueue(tx: Parameters<PumpTradeDecoder["decode"]>[0]): void {
@@ -98,36 +138,70 @@ export class TradingRuntime {
       if (!adapter) continue;
       if (event.curve) adapter.noteCurve?.(descriptor.mint, event.curve);
       if (event.swap) adapter.noteSwap?.(descriptor.mint, event.swap);
-      let state = this.#states.get(descriptor);
-      if (!state && event.trader === this.config.TARGET_WALLET && event.side === "buy") {
-        state = this.#states.create(descriptor, adapter, event);
-        state.transition(TokenLifecycleState.TRACKING_POOL);
-        state.prices.currentMarkPrice = event.price;
-        await this.#subscribePool(descriptor, event.slot);
-        this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, venue: descriptor.venue, signature: event.signature }, "[03 DETECT] Target bought token; now tracking pool");
-        this.#strategy.onEvent(state, event);
-        if (state.lifecycle === TokenLifecycleState.CLOSED || state.lifecycle === TokenLifecycleState.FAILED) {
-          await this.#stopTrackingPool(state, "strategy rejected gate");
-        }
-        continue;
-      }
-      if (!state) continue;
-      if (event.trader === this.config.TARGET_WALLET) state.recordTargetTrade(event);
-      if (!state.events.add(event)) continue;
-      state.prices.currentMarkPrice = event.price;
-      this.#strategy.onEvent(state, event);
-      if (state.lifecycle === TokenLifecycleState.CLOSED || state.lifecycle === TokenLifecycleState.FAILED) {
-        await this.#stopTrackingPool(state, "strategy finished");
-      }
+      let created = false;
+      for (const slot of this.#slots) created = this.#apply(slot, descriptor, adapter, event) || created;
+      if (created) this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, venue: descriptor.venue, signature: event.signature, strategies: this.#slots.map(slot => slot.name) }, "[03 DETECT] Target bought token; now tracking pool");
     }
   }
 
+  #apply(slot: StrategySlot, descriptor: Parameters<VibeClient["subscribePool"]>[0], adapter: VenueAdapter, event: Parameters<Strategy["onEvent"]>[1]): boolean {
+    let state = slot.states.get(descriptor);
+    if (!state && event.trader === this.config.TARGET_WALLET && event.side === "buy") {
+      state = slot.states.create(descriptor, adapter, event);
+      this.#owner.set(state, slot);
+      slot.poolNeeded.set(poolKey(descriptor), true);
+      state.transition(TokenLifecycleState.TRACKING_POOL);
+      state.prices.currentMarkPrice = event.price;
+      slot.strategy.onEvent(state, event);
+      if (this.#isTerminal(state)) this.#dropState(slot, state, "strategy finished");
+      else this.#queueSync(descriptor, event.slot);
+      return true;
+    }
+    if (!state) return false;
+    if (event.trader === this.config.TARGET_WALLET) state.recordTargetTrade(event);
+    if (!state.events.add(event)) return false;
+    state.prices.currentMarkPrice = event.price;
+    slot.strategy.onEvent(state, event);
+    if (this.#isTerminal(state)) this.#dropState(slot, state, "strategy finished");
+    return false;
+  }
+
   async #recoverPositions(): Promise<void> {
-    const latest = new Map<string, import("./recovery/journal.js").JournalRecord>();
+    const records = await this.journal.read();
+    const activeNames = this.#slots.map(slot => slot.name);
+    const opens: RecoveredOpen[] = [];
+    for (const slot of this.#slots) opens.push(...await this.#openRecords(slot, records, activeNames));
+    const walletByMint = new Map<string, bigint>();
+    for (const open of opens) {
+      const mint = open.record.descriptor?.mint;
+      if (!mint || walletByMint.has(mint)) continue;
+      walletByMint.set(mint, await this.#walletTokenAmount(mint));
+    }
+    for (const open of opens) {
+      const descriptor = open.record.descriptor;
+      if (!descriptor) continue;
+      const others = opens.filter(candidate => candidate !== open && candidate.record.descriptor?.mint === descriptor.mint);
+      const tokenAmount = allocateRecoveredTokens(
+        open.recordedAmount,
+        walletByMint.get(descriptor.mint) ?? 0n,
+        others.reduce((sum, candidate) => sum + candidate.recordedAmount, 0n),
+        others.filter(candidate => candidate.recordedAmount === 0n).length
+      );
+      if (tokenAmount <= 0n || open.entryPrice <= 0) {
+        if (others.length > 0) this.logger.error({ mint: descriptor.mint, strategy: open.slot.name, recordedAmount: open.recordedAmount.toString() }, "[07 POSITION] Skipped recovery; strategy token amount could not be separated");
+        continue;
+      }
+      await this.#restoreOpen(open, tokenAmount);
+    }
+  }
+
+  async #openRecords(slot: StrategySlot, records: readonly JournalRecord[], activeNames: readonly string[]): Promise<RecoveredOpen[]> {
+    const latest = new Map<string, JournalRecord>();
     const lastBuyFillLamports = new Map<string, string>();
     const lastBuySignature = new Map<string, string>();
-    for (const record of await this.journal.read()) {
+    for (const record of records) {
       if (!record.descriptor) continue;
+      if (!journalRecordMatchesStrategy(record.strategy, slot.name, activeNames)) continue;
       const key = poolKey(record.descriptor);
       latest.set(key, record);
       if (record.event === "position_closed") {
@@ -138,6 +212,7 @@ export class TradingRuntime {
         if (record.event === "buy_sent" && record.signature) lastBuySignature.set(key, record.signature);
       }
     }
+    const opens: RecoveredOpen[] = [];
     for (const record of latest.values()) {
       const descriptor = record.descriptor;
       if (!descriptor || record.lifecycle === TokenLifecycleState.CLOSED || record.lifecycle === TokenLifecycleState.FAILED) continue;
@@ -150,53 +225,92 @@ export class TradingRuntime {
         if (tx && !tx.meta?.err) {
           const fill = adapter.parseFill(tx, this.config.keypair.publicKey, descriptor.mint);
           recordedAmount = fill.tokenAmount;
-          entryPrice = fill.price;
+          if (entryPrice <= 0) entryPrice = fill.price;
         }
       }
-      const accounts = await this.connection.getParsedTokenAccountsByOwner(this.config.keypair.publicKey, { mint: new PublicKey(descriptor.mint) }, "confirmed");
-      const walletAmount = accounts.value.reduce((sum, account) => sum + BigInt(account.account.data.parsed.info.tokenAmount.amount as string), 0n);
-      const tokenAmount = recordedAmount === 0n ? walletAmount : recordedAmount < walletAmount ? recordedAmount : walletAmount;
-      if (tokenAmount <= 0n || entryPrice <= 0) continue;
-      const now = Date.now();
-      const seedEvent = {
-        signature: record.signature ?? "recovered",
-        slot: 0,
-        eventIndex: 0,
-        timestampMs: record.entryProcessedMs ?? now,
-        receivedMonoMs: performance.now(),
-        mint: descriptor.mint,
-        pool: descriptor.pool,
-        programId: descriptor.programId,
-        trader: this.config.TARGET_WALLET,
-        side: "buy" as const,
-        solAmount: 0n,
-        tokenAmount,
-        price: entryPrice,
-        curveProgress: descriptor.venue === "pumpswap" ? 1 : undefined
-      };
-      const state = this.#states.create(descriptor, adapter, seedEvent);
-      state.restorePosition(tokenAmount, entryPrice, record.prices?.currentMarkPrice ?? entryPrice, record.entryProcessedMs ?? now);
-      state.buyLamports = record.buyLamports ? BigInt(record.buyLamports) : this.config.buyAmountLamports;
       const key = poolKey(descriptor);
-      const recoveredEntrySolAmount = record.actualEntrySolAmount ?? lastBuyFillLamports.get(key);
-      state.actualEntrySolAmount = recoveredEntrySolAmount ? BigInt(recoveredEntrySolAmount) : undefined;
-      state.buySignature = record.buySignature ?? lastBuySignature.get(key) ?? record.signature;
-      await this.#subscribePool(descriptor);
-      this.#strategy.restoreOpenPosition?.(state, entryPrice);
-      this.logger.warn({ mint: descriptor.mint, pool: descriptor.pool, tokenAmount }, "[07 POSITION] Recovered existing position");
+      opens.push({
+        slot,
+        record,
+        recordedAmount,
+        entryPrice,
+        entrySolAmount: record.actualEntrySolAmount ?? lastBuyFillLamports.get(key),
+        buySignature: record.buySignature ?? lastBuySignature.get(key) ?? record.signature,
+        warnUntagged: activeNames.length > 1 && !record.strategy
+      });
     }
+    return opens;
   }
 
-  canOpenPosition(candidate: import("./state/tokenState.js").TokenState): boolean {
+  async #walletTokenAmount(mint: string): Promise<bigint> {
+    const accounts = await this.connection.getParsedTokenAccountsByOwner(this.config.keypair.publicKey, { mint: new PublicKey(mint) }, "confirmed");
+    return accounts.value.reduce((sum, account) => sum + BigInt(account.account.data.parsed.info.tokenAmount.amount as string), 0n);
+  }
+
+  async #restoreOpen(open: RecoveredOpen, tokenAmount: bigint): Promise<void> {
+    const descriptor = open.record.descriptor;
+    if (!descriptor) return;
+    const adapter = this.#adapters.get(descriptor.venue);
+    if (!adapter) return;
+    const now = Date.now();
+    const seedEvent = {
+      signature: open.record.signature ?? "recovered",
+      slot: 0,
+      eventIndex: 0,
+      timestampMs: open.record.entryProcessedMs ?? now,
+      receivedMonoMs: performance.now(),
+      mint: descriptor.mint,
+      pool: descriptor.pool,
+      programId: descriptor.programId,
+      trader: this.config.TARGET_WALLET,
+      side: "buy" as const,
+      solAmount: 0n,
+      tokenAmount,
+      price: open.entryPrice,
+      curveProgress: descriptor.venue === "pumpswap" ? 1 : undefined
+    };
+    const state = open.slot.states.create(descriptor, adapter, seedEvent);
+    this.#owner.set(state, open.slot);
+    open.slot.poolNeeded.set(poolKey(descriptor), true);
+    state.restorePosition(tokenAmount, open.entryPrice, open.record.prices?.currentMarkPrice ?? open.entryPrice, open.record.entryProcessedMs ?? now);
+    state.buyLamports = open.record.buyLamports ? BigInt(open.record.buyLamports) : open.slot.buyAmountLamports;
+    state.actualEntrySolAmount = open.entrySolAmount ? BigInt(open.entrySolAmount) : undefined;
+    state.buySignature = open.buySignature;
+    await this.#subscribePool(descriptor);
+    open.slot.strategy.restoreOpenPosition?.(state, open.entryPrice);
+    if (open.warnUntagged) this.logger.warn({ mint: descriptor.mint, strategy: open.slot.name }, "[07 POSITION] Untagged position restored into the first strategy");
+    this.logger.warn({ mint: descriptor.mint, pool: descriptor.pool, tokenAmount, strategy: open.slot.name }, "[07 POSITION] Recovered existing position");
+  }
+
+  canOpenPosition(candidate: TokenState): boolean {
     const blocked = new Set(this.config.BLOCKED_MINTS.split(",").map(value => value.trim()).filter(Boolean));
     if (blocked.has(candidate.descriptor.mint)) { this.logger.warn({ mint: candidate.descriptor.mint }, "[05 ENTRY] Buy blocked: mint denylist"); return false; }
-    let riskCount = 0;
-    for (const state of this.#states.values()) {
-      if (state === candidate) continue;
-      if (state.lifecycle !== TokenLifecycleState.TRACKING_POOL && state.lifecycle !== TokenLifecycleState.CLOSED && state.lifecycle !== TokenLifecycleState.FAILED) riskCount++;
-    }
-    if (riskCount >= this.config.MAX_CONCURRENT_POSITIONS) { this.logger.warn({ riskCount }, "[05 ENTRY] Buy blocked: position limit"); return false; }
     return true;
+  }
+
+  #isTerminal(state: TokenState): boolean {
+    return state.lifecycle === TokenLifecycleState.CLOSED || state.lifecycle === TokenLifecycleState.FAILED;
+  }
+
+  #dropState(slot: StrategySlot, state: TokenState, reason: string): void {
+    const descriptor = state.descriptor;
+    slot.poolNeeded.delete(poolKey(descriptor));
+    slot.states.delete(descriptor);
+    this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, strategy: slot.name, reason }, "[CLEANUP] Strategy stopped tracking mint");
+    this.#queueSync(descriptor);
+  }
+
+  #queueSync(descriptor: Parameters<VibeClient["subscribePool"]>[0], fromSlot?: number): void {
+    this.#queue = this.#queue.then(() => this.#syncSubscription(descriptor, fromSlot)).catch(error => {
+      this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: descriptor.mint }, "[02 STREAM] Pool filter update failed");
+    });
+  }
+
+  async #syncSubscription(descriptor: Parameters<VibeClient["subscribePool"]>[0], fromSlot?: number): Promise<void> {
+    const key = poolKey(descriptor);
+    const wanted = this.#slots.some(slot => slot.poolNeeded.get(key) === true);
+    if (wanted) await this.#subscribePool(descriptor, fromSlot);
+    else await this.#releaseSubscription(key, descriptor);
   }
 
   async #subscribePool(descriptor: Parameters<VibeClient["subscribePool"]>[0], fromSlot?: number): Promise<void> {
@@ -208,28 +322,17 @@ export class TradingRuntime {
     this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, subscriptions: this.#subscriptions.size }, "[02 STREAM] Pool subscription active");
   }
 
-  async #releasePool(state: import("./state/tokenState.js").TokenState): Promise<void> {
-    const key = poolKey(state.descriptor);
+  async #releaseSubscription(key: string, descriptor: { mint: string; pool: string }): Promise<void> {
     const subscription = this.#subscriptions.get(key);
     if (!subscription) return;
     await subscription.close();
     this.#subscriptions.delete(key);
-    this.logger.info({ mint: state.descriptor.mint, pool: state.descriptor.pool, subscriptions: this.#subscriptions.size }, "[02 STREAM] Released pool from gRPC filter");
-  }
-
-  async #stopTrackingPool(state: import("./state/tokenState.js").TokenState, reason: string): Promise<void> {
-    const key = poolKey(state.descriptor);
-    const subscription = this.#subscriptions.get(key);
-    if (subscription) {
-      await subscription.close();
-      this.#subscriptions.delete(key);
-    }
-    this.#states.delete(state.descriptor);
-    this.logger.info({ mint: state.descriptor.mint, pool: state.descriptor.pool, subscriptions: this.#subscriptions.size, reason }, "[CLEANUP] Stopped tracking pool");
+    this.logger.info({ mint: descriptor.mint, pool: descriptor.pool, subscriptions: this.#subscriptions.size }, "[02 STREAM] Released pool from gRPC filter");
   }
 
   async close(): Promise<void> {
-    this.logger.info({ subscriptions: this.#subscriptions.size, receivedTransactions: this.#receivedTransactions, decodedEvents: this.#decodedEvents }, "[SHUTDOWN] Trading runtime stopping");
+    const tracked = this.#slots.reduce((sum, slot) => sum + [...slot.states.values()].length, 0);
+    this.logger.info({ subscriptions: this.#subscriptions.size, receivedTransactions: this.#receivedTransactions, decodedEvents: this.#decodedEvents, tracked }, "[SHUTDOWN] Trading runtime stopping");
     if (this.#positionTimer) clearInterval(this.#positionTimer);
     if (this.#healthTimer) clearInterval(this.#healthTimer);
     await Promise.allSettled([...this.#subscriptions.values()].map(subscription => subscription.close()));

@@ -111,13 +111,42 @@ export class PumpBondingCurveAdapter extends PumpAdapterBase {
       if (!log.startsWith("Program data: ")) continue;
       const event = this.#program.coder.events.decode(log.slice("Program data: ".length));
       if (event?.name !== "tradeEvent") continue;
-      const data = event.data as { mint: PublicKey; user: PublicKey; tokenAmount: BN; solAmount: BN };
+      const data = event.data as {
+        mint: PublicKey; user: PublicKey; tokenAmount: BN; solAmount: BN;
+        virtualTokenReserves?: BN; virtualQuoteReserves?: BN; virtualSolReserves?: BN; realTokenReserves?: BN;
+        creator?: PublicKey; mayhemMode?: boolean; quoteMint?: PublicKey;
+        feeBasisPoints?: BN; creatorFeeBasisPoints?: BN; feeRecipient?: PublicKey; cashbackFeeBasisPoints?: BN;
+      };
       if (data.mint.toBase58() !== mint || !data.user.equals(owner)) continue;
+      this.#noteTrade(data);
       const tokenAmount = BigInt(data.tokenAmount.toString(10));
       const solAmount = BigInt(data.solAmount.toString(10));
       return { tokenAmount, solAmount, price: tokenAmount === 0n ? 0 : Number(solAmount) / Number(tokenAmount), success: tokenAmount > 0n };
     }
     return super.parseFill(tx, owner, mint);
+  }
+  #noteTrade(data: {
+    mint: PublicKey; virtualTokenReserves?: BN; virtualQuoteReserves?: BN; virtualSolReserves?: BN; realTokenReserves?: BN;
+    creator?: PublicKey; mayhemMode?: boolean; quoteMint?: PublicKey;
+    feeBasisPoints?: BN; creatorFeeBasisPoints?: BN; feeRecipient?: PublicKey; cashbackFeeBasisPoints?: BN;
+  }): void {
+    const quote = data.virtualQuoteReserves ?? data.virtualSolReserves;
+    if (!quote || !data.virtualTokenReserves || !data.realTokenReserves || !data.creator) return;
+    const mint = data.mint.toBase58();
+    const previous = this.#curves.get(mint);
+    const bn = (value: BN): bigint => BigInt(value.toString(10));
+    this.noteCurve(mint, {
+      virtualQuoteReserves: bn(quote),
+      virtualTokenReserves: bn(data.virtualTokenReserves),
+      realTokenReserves: bn(data.realTokenReserves),
+      creator: data.creator.toBase58(),
+      mayhemMode: data.mayhemMode === true,
+      quoteMint: data.quoteMint?.toBase58() ?? previous?.quoteMint,
+      protocolFeeBps: data.feeBasisPoints ? bn(data.feeBasisPoints) : previous?.protocolFeeBps ?? 0n,
+      creatorFeeBps: data.creatorFeeBasisPoints ? bn(data.creatorFeeBasisPoints) : previous?.creatorFeeBps ?? 0n,
+      feeRecipient: data.feeRecipient?.toBase58() ?? previous?.feeRecipient,
+      cashback: data.cashbackFeeBasisPoints ? !data.cashbackFeeBasisPoints.isZero() : previous?.cashback ?? false
+    });
   }
   async buildBuy({ descriptor, owner, lamports, slippageBps }: BuildBuyArgs): Promise<PreparedTradeTransaction> {
     const curve = this.#curves.get(descriptor.mint);
@@ -187,16 +216,32 @@ export class PumpSwapAdapter extends PumpAdapterBase {
       if (!log.startsWith("Program data: ")) continue;
       const event = this.#program.coder.events.decode(log.slice("Program data: ".length));
       if (event?.name !== "buyEvent" && event?.name !== "sellEvent") continue;
-      const data = event.data as { user: PublicKey; baseAmountOut?: BN; baseAmountIn?: BN; quoteAmountIn?: BN; quoteAmountOut?: BN };
+      const data = event.data as {
+        user: PublicKey; pool?: PublicKey;
+        baseAmountOut?: BN; baseAmountIn?: BN; quoteAmountIn?: BN; quoteAmountOut?: BN;
+        poolBaseTokenReserves?: BN; poolQuoteTokenReserves?: BN; virtualQuoteReserves?: BN;
+      };
       if (!data.user.equals(owner)) continue;
       const base = data.baseAmountOut ?? data.baseAmountIn;
       const quote = data.quoteAmountIn ?? data.quoteAmountOut;
       if (!base || !quote) continue;
+      this.#noteTrade(mint, data);
       const tokenAmount = BigInt(base.toString(10));
       const solAmount = BigInt(quote.toString(10));
       return { tokenAmount, solAmount, price: tokenAmount === 0n ? 0 : Number(solAmount) / Number(tokenAmount), success: tokenAmount > 0n };
     }
     return super.parseFill(tx, owner, mint);
+  }
+  #noteTrade(mint: string, data: { pool?: PublicKey; poolBaseTokenReserves?: BN; poolQuoteTokenReserves?: BN; virtualQuoteReserves?: BN }): void {
+    const existing = this.#pools.get(mint);
+    if (!existing || !data.poolBaseTokenReserves || !data.poolQuoteTokenReserves) return;
+    if (data.pool && data.pool.toBase58() !== existing.pool) return;
+    this.noteSwap(mint, {
+      ...existing,
+      baseReserve: BigInt(data.poolBaseTokenReserves.toString(10)),
+      quoteReserve: BigInt(data.poolQuoteTokenReserves.toString(10)),
+      virtualQuoteReserves: data.virtualQuoteReserves?.toString() ?? existing.virtualQuoteReserves
+    });
   }
   async buildBuy({ descriptor, owner, lamports, slippageBps }: BuildBuyArgs): Promise<PreparedTradeTransaction> {
     const swap = this.#pools.get(descriptor.mint);

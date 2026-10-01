@@ -10,6 +10,7 @@ import type { HeliusSender, SenderTiming } from "../helius/sender.js";
 import type { RecoveryJournal } from "../recovery/journal.js";
 import { isNonRetryableBuyError, retryEntryDeviationPct } from "./buyRetryPolicy.js";
 import type { PnlJournal } from "../pnl/pnlJournal.js";
+import { MintTradeLock } from "./mintTradeLock.js";
 
 export class LiveStrategyExecution implements StrategyExecution {
   #strategy?: Strategy;
@@ -27,7 +28,9 @@ export class LiveStrategyExecution implements StrategyExecution {
     private readonly confirmations: ConfirmationTracker,
     private readonly journal: RecoveryJournal,
     private readonly pnlJournal: PnlJournal,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly strategyName: string,
+    private readonly mintTrades: MintTradeLock = new MintTradeLock()
   ) {}
 
   bindStrategy(strategy: Strategy): void {
@@ -38,9 +41,19 @@ export class LiveStrategyExecution implements StrategyExecution {
     this.#record(state, event, extra);
   }
 
-  async sendBuy(state: TokenState, signalMonoMs: number): Promise<void> {
+  sendBuy(state: TokenState, signalMonoMs: number): Promise<void> {
+    return this.mintTrades.run(state.descriptor.mint, () => this.#sendBuy(state, signalMonoMs));
+  }
+
+  sendSell(state: TokenState, reason: string, signalMonoMs: number): Promise<void> {
+    return this.mintTrades.run(state.descriptor.mint, () => this.#sendSell(state, reason, signalMonoMs));
+  }
+
+  async #sendBuy(state: TokenState, signalMonoMs: number): Promise<void> {
     let lastError: unknown;
     const buySlippage = state.buySlippageBps ?? this.buySlippageBps;
+    // The strategy may have built this before the mint lock. Rebuild so the quote follows the previous trade.
+    state.preparedBuy = undefined;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         if (attempt > 1 && state.prices.currentMarkPrice) {
@@ -49,8 +62,7 @@ export class LiveStrategyExecution implements StrategyExecution {
           if (!isEntryMarketCapAllowed(currentPrice, this.maxEntryMarketCapSol)) {
             const error = new Error(`buy retry aborted: market cap ${marketCapSol.toFixed(4)} SOL is at or above ${this.maxEntryMarketCapSol} SOL`);
             this.logger.warn({ attempt, mint: state.descriptor.mint, currentPrice, marketCapSol, maxMarketCapSol: this.maxEntryMarketCapSol }, "[05 ENTRY] Buy retry blocked by market-cap limit");
-            this.#fail(state, "buy_market_cap_rejected", error);
-            this.#strategy?.onBuyFailed?.(state);
+            this.#rejectBuy(state, "buy_market_cap_rejected", error);
             return;
           }
         }
@@ -60,8 +72,7 @@ export class LiveStrategyExecution implements StrategyExecution {
           if (retryDeviationPct > this.maxEntryDeviationPct) {
             const error = new Error(`buy retry aborted: latest price deviation ${retryDeviationPct.toFixed(4)}% exceeds ${this.maxEntryDeviationPct}%`);
             this.logger.warn({ attempt, mint: state.descriptor.mint, entrySignalPrice: state.prices.entrySignalPrice, latestPrice: state.prices.currentMarkPrice, retryDeviationPct, maxDeviationPct: this.maxEntryDeviationPct }, "[05 ENTRY] Buy retry blocked by entry deviation limit");
-            this.#fail(state, "buy_retry_aborted", error);
-            this.#strategy?.onBuyFailed?.(state);
+            this.#rejectBuy(state, "buy_retry_aborted", error);
             return;
           }
         }
@@ -90,7 +101,7 @@ export class LiveStrategyExecution implements StrategyExecution {
         this.#strategy?.onBuyFill?.(state, { price: fill.price, slot: 0 });
         if ((state.prices.actualEntryDeviationPct ?? 0) > this.maxEntryDeviationPct && state.claimSellSend()) {
           this.logger.error({ mint: state.descriptor.mint, entrySignalPrice: state.prices.entrySignalPrice, actualEntryFillPrice: fill.price, deviationPct: state.prices.actualEntryDeviationPct, maxDeviationPct: this.maxEntryDeviationPct }, "[07 POSITION] Entry deviation limit exceeded; exiting position");
-          await this.sendSell(state, "ENTRY_DEVIATION", performance.now());
+          await this.#sendSell(state, "ENTRY_DEVIATION", performance.now());
         }
         return;
       } catch (error) {
@@ -98,17 +109,15 @@ export class LiveStrategyExecution implements StrategyExecution {
         this.logger.warn({ attempt, err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[05 ENTRY] Buy attempt failed");
         if (isNonRetryableBuyError(error, state.descriptor.venue)) {
           this.logger.warn({ attempt, mint: state.descriptor.mint, venue: state.descriptor.venue }, "[05 ENTRY] Buy retry blocked after slippage failure");
-          this.#fail(state, "buy_slippage_rejected", error);
-          this.#strategy?.onBuyFailed?.(state);
+          this.#rejectBuy(state, "buy_slippage_rejected", error);
           return;
         }
       }
     }
-    this.#fail(state, "buy_failed", lastError);
-    this.#strategy?.onBuyFailed?.(state);
+    this.#rejectBuy(state, "buy_failed", lastError);
   }
 
-  async sendSell(state: TokenState, reason: string, signalMonoMs: number): Promise<void> {
+  async #sendSell(state: TokenState, reason: string, signalMonoMs: number): Promise<void> {
     if (!state.actualTokenAmount) { this.#sellFailed(state, reason, new Error("position token amount is unknown")); return; }
     let lastError: unknown;
     const sellSlippage = state.sellSlippageBps ?? this.sellSlippageBps;
@@ -129,7 +138,8 @@ export class LiveStrategyExecution implements StrategyExecution {
         const closedAtMs = Date.now();
         if (state.actualEntrySolAmount && state.prices.actualEntryFillPrice && state.entryProcessedMs) {
           try {
-            await this.pnlJournal.record({
+            const day = await this.pnlJournal.record({
+              strategy: this.strategyName,
               closedAtMs,
               descriptor: state.descriptor,
               buyLamports: state.actualEntrySolAmount,
@@ -143,20 +153,26 @@ export class LiveStrategyExecution implements StrategyExecution {
               sellSignature: state.sellSignature,
               entryProcessedMs: state.entryProcessedMs
             });
-            this.logger.info({ mint: state.descriptor.mint, pnlLamports: fill.solAmount - state.actualEntrySolAmount }, "[PNL] Closed trade appended");
+            this.logger.info({ mint: state.descriptor.mint, strategy: this.strategyName, date: day.date, pnlLamports: fill.solAmount - state.actualEntrySolAmount, dayPnlLamports: day.pnlLamports, dayTrades: day.trades }, "[PNL] Closed trade appended");
           } catch (error) {
             this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[PNL] Failed to append closed trade");
           }
         } else this.logger.error({ mint: state.descriptor.mint }, "[PNL] Exact PNL unavailable: confirmed BUY fill amount is missing");
 
-        const thenBuy = this.#strategy?.onSellFill?.(state)?.thenBuy ?? false;
-        if (thenBuy) {
+        const closed = this.#strategy?.onSellFill?.(state);
+        if (closed?.thenBuy) {
           state.clearFilledPosition();
           state.resetBuySendClaim();
           state.resetSellSendClaim();
           state.transition(TokenLifecycleState.TRACKING_POOL);
           this.logger.info({ mint: state.descriptor.mint }, "[REENTRY] Fire-then-buy: preparing scalp entry");
           await this.#strategy?.onThenBuy?.(state);
+        } else if (closed?.rearm) {
+          state.clearFilledPosition();
+          state.resetBuySendClaim();
+          state.resetSellSendClaim();
+          state.transition(TokenLifecycleState.TRACKING_POOL);
+          this.logger.info({ mint: state.descriptor.mint }, "[REENTRY] Round finished; still watching for the next target buy");
         } else {
           state.transition(TokenLifecycleState.CLOSED);
         }
@@ -200,6 +216,7 @@ export class LiveStrategyExecution implements StrategyExecution {
 
   #record(state: TokenState, event: string, extra: object = {}): void {
     const value = {
+      strategy: this.strategyName,
       event,
       descriptor: state.descriptor,
       lifecycle: state.lifecycle,
@@ -230,14 +247,30 @@ export class LiveStrategyExecution implements StrategyExecution {
     state.releaseSellSend();
     state.preparedSell = undefined;
     const err = error instanceof Error ? error.message : String(error);
-    this.journal.record({ event: "sell_retry_exhausted", descriptor: state.descriptor, lifecycle: state.lifecycle, actualTokenAmount: state.actualTokenAmount, actualEntrySolAmount: state.actualEntrySolAmount, prices: state.prices, entryProcessedMs: state.entryProcessedMs, reason, error: err });
+    this.journal.record({ strategy: this.strategyName, event: "sell_retry_exhausted", descriptor: state.descriptor, lifecycle: state.lifecycle, actualTokenAmount: state.actualTokenAmount, actualEntrySolAmount: state.actualEntrySolAmount, prices: state.prices, entryProcessedMs: state.entryProcessedMs, reason, error: err });
     this.logger.error({ err, reason, mint: state.descriptor.mint }, "[08 EXIT] Sell retries exhausted; position still monitored");
+  }
+
+  #rejectBuy(state: TokenState, event: string, error: unknown): void {
+    const rearm = this.#strategy?.onBuyFailed?.(state)?.rearm === true;
+    if (!rearm) {
+      this.#fail(state, event, error);
+      return;
+    }
+    try {
+      if (state.lifecycle === TokenLifecycleState.BUY_PREPARED) state.transition(TokenLifecycleState.TRACKING_POOL);
+    } catch { /* already tracking or terminal */ }
+    state.resetBuySendClaim();
+    state.preparedBuy = undefined;
+    const err = error instanceof Error ? error.message : String(error);
+    this.journal.record({ strategy: this.strategyName, event, descriptor: state.descriptor, lifecycle: state.lifecycle, error: err });
+    this.logger.warn({ err, mint: state.descriptor.mint, pool: state.descriptor.pool }, "[05 ENTRY] Buy failed; still watching this mint");
   }
 
   #fail(state: TokenState, event: string, error: unknown): void {
     try { state.transition(TokenLifecycleState.FAILED); } catch {}
     const err = error instanceof Error ? error.message : String(error);
-    this.journal.record({ event, descriptor: state.descriptor, lifecycle: state.lifecycle, error: err });
+    this.journal.record({ strategy: this.strategyName, event, descriptor: state.descriptor, lifecycle: state.lifecycle, error: err });
     this.logger.error({ err, mint: state.descriptor.mint, pool: state.descriptor.pool }, `[ERROR] `);
   }
 }

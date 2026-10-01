@@ -1,4 +1,4 @@
-/** Live bot prices are lamports/raw-token. Scalpingbot strategy_v_011 uses SOL/token (6dp). */
+/** Live bot prices are lamports/raw-token. Scalpingbot strategies use SOL/token (6dp). */
 export const LIVE_PRICE_TO_STRATEGY = 1e-3;
 const LAMPORTS_PER_SOL = 1_000_000_000;
 

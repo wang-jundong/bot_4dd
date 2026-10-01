@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export interface JournalRecord {
+  strategy?: string;
   event?: string;
   descriptor?: { mint: string; pool: string; programId: string; venue: string; tokenProgram?: string; quoteMint?: string; relevantAccounts: readonly string[] };
   lifecycle?: string;
