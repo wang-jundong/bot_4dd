@@ -9,7 +9,7 @@ import { HeliusSender } from "./helius/sender.js";
 import { RecoveryJournal } from "./recovery/journal.js";
 import { PnlJournal } from "./pnl/pnlJournal.js";
 import { TradingRuntime } from "./runtime.js";
-import { StrategyV001Live } from "./strategy/strategyV001Live.js";
+import { StrategyV011Live } from "./strategy/strategyV011Live.js";
 import { PumpBondingCurveAdapter, PumpSwapAdapter } from "./venues/pumpAdapters.js";
 import { PumpTradeDecoder } from "./venues/tradeDecoder.js";
 
@@ -49,8 +49,8 @@ const execution = new LiveStrategyExecution(
 );
 
 let runtime!: TradingRuntime;
-const strategy = new StrategyV001Live(
-  config.strategyV001,
+const strategy = new StrategyV011Live(
+  config.strategyV011,
   execution,
   config.keypair,
   config.TARGET_WALLET,
@@ -66,11 +66,11 @@ logger.info({
   targetWallet: config.TARGET_WALLET,
   executionMode: config.EXECUTION_MODE,
   buyAmountLamports: config.buyAmountLamports,
-  rule1SizeSol: config.strategyV001.rule_1_size_sol,
-  rule2Enabled: config.strategyV001.rule_2_enabled,
-  clip: [config.strategyV001.clip_lo, config.strategyV001.clip_hi],
-  mc: [config.strategyV001.min_mc_sol, config.strategyV001.max_mc_sol],
-  timerMs: config.strategyV001.timer_ms,
+  rule1SizeSol: config.strategyV011.rule_1_size_sol,
+  rule2Enabled: config.strategyV011.rule_2_enabled,
+  clip: [config.strategyV011.clip_lo, config.strategyV011.clip_hi],
+  mc: [config.strategyV011.min_mc_sol, config.strategyV011.max_mc_sol],
+  timerMs: config.strategyV011.timer_ms,
   pnlPath: config.PNL_PATH,
   maxConcurrentPositions: config.MAX_CONCURRENT_POSITIONS,
   maxEntryMarketCapSol: config.MAX_ENTRY_MARKET_CAP_SOL,
@@ -79,7 +79,7 @@ logger.info({
 
 blockhashes.start(error => logger.error({ err: error instanceof Error ? error.message : String(error) }, "[01 STARTUP] Blockhash refresh failed"));
 await runtime.start();
-logger.info({ wallet: config.keypair.publicKey.toBase58(), strategy: config.STRATEGY, swqosOnly: config.HELIUS_SENDER_SWQOS_ONLY }, "[01 STARTUP] Bot ready; strategy_v_001 active");
+logger.info({ wallet: config.keypair.publicKey.toBase58(), strategy: config.STRATEGY, swqosOnly: config.HELIUS_SENDER_SWQOS_ONLY }, "[01 STARTUP] Bot ready; strategy_v_011 active");
 
 let closing = false;
 async function shutdown(): Promise<void> {

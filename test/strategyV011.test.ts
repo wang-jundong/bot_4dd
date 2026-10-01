@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { loadStrategyV001Config } from "../src/config/strategyV001.js";
-import { PHASE_DONE, PHASE_HOLDING, PHASE_WATCHING, StrategyV001Engine } from "../src/strategy/strategyV001Engine.js";
-import type { StrategyMarketEvent } from "../src/strategy/strategyV001Engine.js";
+import { loadStrategyV011Config } from "../src/config/strategyV011.js";
+import { PHASE_DONE, PHASE_HOLDING, PHASE_WATCHING, StrategyV011Engine } from "../src/strategy/strategyV011Engine.js";
+import type { StrategyMarketEvent } from "../src/strategy/strategyV011Engine.js";
 
-const cfg = () => loadStrategyV001Config();
+const cfg = () => loadStrategyV011Config();
 
 const event = (overrides: Partial<StrategyMarketEvent> = {}): StrategyMarketEvent => ({
   signature: "sig",
@@ -17,9 +17,9 @@ const event = (overrides: Partial<StrategyMarketEvent> = {}): StrategyMarketEven
   ...overrides
 });
 
-describe("strategy_v_001 engine", () => {
+describe("strategy_v_011 engine", () => {
   it("binds an in-clip gate buy into watching", () => {
-    const engine = new StrategyV001Engine(cfg());
+    const engine = new StrategyV011Engine(cfg());
     const decision = engine.bindGateBuy({
       price: 50e-9,
       sol: 3.0,
@@ -33,7 +33,7 @@ describe("strategy_v_001 engine", () => {
   });
 
   it("skips gate buys outside the SOL clip", () => {
-    const engine = new StrategyV001Engine(cfg());
+    const engine = new StrategyV011Engine(cfg());
     const decision = engine.bindGateBuy({
       price: 50e-9,
       sol: 1.0,
@@ -47,7 +47,7 @@ describe("strategy_v_001 engine", () => {
   });
 
   it("fires rule_1 after the watch window when momentum is calm", () => {
-    const engine = new StrategyV001Engine(cfg());
+    const engine = new StrategyV011Engine(cfg());
     engine.bindGateBuy({
       price: 50e-9,
       sol: 3.0,
@@ -64,7 +64,7 @@ describe("strategy_v_001 engine", () => {
   });
 
   it("exits on mark take-profit vs gate buy", () => {
-    const engine = new StrategyV001Engine(cfg());
+    const engine = new StrategyV011Engine(cfg());
     engine.bindGateBuy({
       price: 50e-9,
       sol: 3.0,
@@ -82,7 +82,7 @@ describe("strategy_v_001 engine", () => {
   });
 
   it("aborts when the target sells before our buy", () => {
-    const engine = new StrategyV001Engine(cfg());
+    const engine = new StrategyV011Engine(cfg());
     engine.bindGateBuy({
       price: 50e-9,
       sol: 3.0,

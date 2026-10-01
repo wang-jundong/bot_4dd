@@ -1,22 +1,22 @@
 import type { Keypair } from "@solana/web3.js";
 import type { Logger } from "pino";
-import type { StrategyV001Config } from "../config/strategyV001.js";
+import type { StrategyV011Config } from "../config/strategyV011.js";
 import type { PoolTradeEvent } from "../events/types.js";
 import type { TokenState } from "../state/tokenState.js";
 import { TokenLifecycleState } from "./state.js";
 import type { Strategy, StrategyExecution } from "./types.js";
-import { StrategyV001Engine, type StrategyDecision, type StrategyMarketEvent } from "./strategyV001Engine.js";
+import { StrategyV011Engine, type StrategyDecision, type StrategyMarketEvent } from "./strategyV011Engine.js";
 import { lamportsToSol, slippagePctToBps, solToLamportsNumber, toStrategyPrice } from "./priceUnits.js";
 
-export class StrategyV001Live implements Strategy {
-  readonly #engines = new WeakMap<TokenState, StrategyV001Engine>();
+export class StrategyV011Live implements Strategy {
+  readonly #engines = new WeakMap<TokenState, StrategyV011Engine>();
   readonly #busy = new WeakSet<TokenState>();
   readonly #poolNeeded = new WeakMap<TokenState, boolean>();
   #poolTape?: (state: TokenState, needed: boolean, fromSlot?: number) => void;
   readonly timerMs: number;
 
   constructor(
-    private readonly cfg: StrategyV001Config,
+    private readonly cfg: StrategyV011Config,
     private readonly execution: StrategyExecution,
     private readonly wallet: Keypair,
     private readonly targetWallet: string,
@@ -128,23 +128,23 @@ export class StrategyV001Live implements Strategy {
     await this.#buy(state, engine, engine.lastBuyReason);
   }
 
-  #syncPool(state: TokenState, engine: StrategyV001Engine, fromSlot?: number): void {
+  #syncPool(state: TokenState, engine: StrategyV011Engine, fromSlot?: number): void {
     const needed = engine.needsPoolTape();
     if (this.#poolNeeded.get(state) === needed) return;
     this.#poolNeeded.set(state, needed);
     this.#poolTape?.(state, needed, needed ? fromSlot : undefined);
   }
 
-  #engine(state: TokenState): StrategyV001Engine | undefined {
+  #engine(state: TokenState): StrategyV011Engine | undefined {
     let engine = this.#engines.get(state);
     if (!engine) {
-      engine = new StrategyV001Engine(this.cfg);
+      engine = new StrategyV011Engine(this.cfg);
       this.#engines.set(state, engine);
     }
     return engine;
   }
 
-  async #dispatch(state: TokenState, engine: StrategyV001Engine, decision: StrategyDecision): Promise<void> {
+  async #dispatch(state: TokenState, engine: StrategyV011Engine, decision: StrategyDecision): Promise<void> {
     this.#logDecision(state, decision, "signal");
     if (decision.kind === "none") return;
     if (decision.kind === "skip") {
@@ -165,7 +165,7 @@ export class StrategyV001Live implements Strategy {
     }
   }
 
-  async #buy(state: TokenState, engine: StrategyV001Engine, reason: string): Promise<void> {
+  async #buy(state: TokenState, engine: StrategyV011Engine, reason: string): Promise<void> {
     if (this.#busy.has(state) || isHolding(state)) return;
     if (!state.claimBuySend()) return;
     this.#busy.add(state);
@@ -187,7 +187,7 @@ export class StrategyV001Live implements Strategy {
         state.buySlippageBps = this.defaultBuySlippageBps;
         state.sellSlippageBps = this.defaultSellSlippageBps;
       }
-      this.logger.info({ mint: state.descriptor.mint, reason, sizeSol, scalp, diag: engine.lastBuyDiag }, "[05 ENTRY] strategy_v_001 buy signal");
+      this.logger.info({ mint: state.descriptor.mint, reason, sizeSol, scalp, diag: engine.lastBuyDiag }, "[05 ENTRY] strategy_v_011 buy signal");
       state.preparedBuy = await state.adapter.buildBuy({
         descriptor: state.descriptor,
         owner: this.wallet.publicKey,
@@ -197,7 +197,7 @@ export class StrategyV001Live implements Strategy {
       state.transition(TokenLifecycleState.BUY_PREPARED);
       await this.execution.sendBuy(state, performance.now());
     } catch (error) {
-      this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[05 ENTRY] strategy_v_001 buy failed");
+      this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[05 ENTRY] strategy_v_011 buy failed");
       try { state.transition(TokenLifecycleState.FAILED); } catch { /* ignore */ }
       engine.onBuyFailed();
     } finally {
@@ -210,11 +210,11 @@ export class StrategyV001Live implements Strategy {
     if (!state.claimSellSend()) return;
     this.#busy.add(state);
     try {
-      this.logger.info({ mint: state.descriptor.mint, reason }, "[08 EXIT] strategy_v_001 sell signal");
+      this.logger.info({ mint: state.descriptor.mint, reason }, "[08 EXIT] strategy_v_011 sell signal");
       state.prices.exitSignalPrice = state.prices.currentMarkPrice;
       await this.execution.sendSell(state, reason, performance.now());
     } catch (error) {
-      this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[08 EXIT] strategy_v_001 sell failed");
+      this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[08 EXIT] strategy_v_011 sell failed");
       state.releaseSellSend();
     } finally {
       this.#busy.delete(state);
@@ -226,7 +226,7 @@ export class StrategyV001Live implements Strategy {
     if (isHolding(state) || state.lifecycle === TokenLifecycleState.BUY_PREPARED || state.lifecycle === TokenLifecycleState.BUY_SENT) return;
     try {
       state.transition(TokenLifecycleState.CLOSED);
-      this.logger.info({ mint: state.descriptor.mint, reason }, "[CLEANUP] strategy_v_001 finished mint");
+      this.logger.info({ mint: state.descriptor.mint, reason }, "[CLEANUP] strategy_v_011 finished mint");
     } catch {
       /* ignore invalid transitions while in-flight */
     }
@@ -234,7 +234,7 @@ export class StrategyV001Live implements Strategy {
 
   #logDecision(state: TokenState, decision: StrategyDecision, stage: string): void {
     if (decision.kind === "none") return;
-    this.logger.info({ mint: state.descriptor.mint, stage, decision }, "[04 STRAT] strategy_v_001 decision");
+    this.logger.info({ mint: state.descriptor.mint, stage, decision }, "[04 STRAT] strategy_v_011 decision");
   }
 }
 

@@ -1,13 +1,13 @@
 /**
- * strategy_v_001 — wall-clock rule_1 entry + mark/event exits, plus rule_2.
+ * strategy_v_011 — wall-clock rule_1 entry + mark/event exits, plus rule_2.
  *
  * Faithful port of scalpingbot Strategy. One instance per mint.
  * Live uses wall clock; backtest replaces `_nowMs` from event timestamps / timer ticks.
  */
 
-import type { StrategyV001Config } from "../config/strategyV001.js";
+import type { StrategyV011Config } from "../config/strategyV011.js";
 
-export const STRATEGY_NAME = "strategy_v_001";
+export const STRATEGY_NAME = "strategy_v_011";
 
 const PRICE_BUF_CAP = 256;
 
@@ -36,8 +36,8 @@ export interface StrategyMarketEvent {
 
 type TimedSample = { t: number; v: number };
 
-export class StrategyV001Engine {
-  private readonly cfg: StrategyV001Config;
+export class StrategyV011Engine {
+  private readonly cfg: StrategyV011Config;
   private readonly rule1SizeSol: number;
   private readonly _timerMs: number;
 
@@ -84,7 +84,7 @@ export class StrategyV001Engine {
   private _lastSellReason = "";
   private _pendingThenBuy = false;
 
-  constructor(cfg: StrategyV001Config) {
+  constructor(cfg: StrategyV011Config) {
     this.cfg = cfg;
     this.rule1SizeSol = Number(cfg.rule_1_size_sol);
     this._timerMs = cfg.timer_ms > 0 ? Math.trunc(cfg.timer_ms) : 200;

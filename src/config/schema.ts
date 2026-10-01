@@ -5,7 +5,7 @@ const integer = (min = 0) => z.coerce.number().int().min(min);
 const bool = z.enum(["true", "false"]).transform(v => v === "true");
 
 export const envSchema = z.object({
-  STRATEGY: z.literal("strategy_v_001").default("strategy_v_001"),
+  STRATEGY: z.literal("strategy_v_011").default("strategy_v_011"),
   EXECUTION_MODE: z.literal("live").default("live"),
   TARGET_WALLET: z.string().min(32),
   BLOCKED_MINTS: z.string().default(""),

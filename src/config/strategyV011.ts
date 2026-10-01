@@ -1,4 +1,4 @@
-export interface StrategyV001Config {
+export interface StrategyV011Config {
   clip_lo: number;
   clip_hi: number;
   min_mc_sol: number;
@@ -34,8 +34,8 @@ export interface StrategyV001Config {
   rule_2_sell_slippage_pct: number;
 }
 
-/** Edit strategy knobs here (replaces config/strategy_v_001.json). */
-export const STRATEGY_V_001_CONFIG: StrategyV001Config = {
+/** Edit strategy knobs here (replaces config/strategy_v_011.json). */
+export const STRATEGY_V_011_CONFIG: StrategyV011Config = {
   clip_lo: 2.2,
   clip_hi: 4.8,
   min_mc_sol: 20,
@@ -73,6 +73,6 @@ export const STRATEGY_V_001_CONFIG: StrategyV001Config = {
   rule_2_sell_slippage_pct: 50
 };
 
-export function loadStrategyV001Config(): StrategyV001Config {
-  return STRATEGY_V_001_CONFIG;
+export function loadStrategyV011Config(): StrategyV011Config {
+  return STRATEGY_V_011_CONFIG;
 }
