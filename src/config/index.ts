@@ -63,7 +63,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     strategyV022,
     buySlippageBps: TRADE.buySlippageBps,
     sellSlippageBps: TRADE.sellSlippageBps,
-    maxEntryDeviationPct: TRADE.maxEntryDeviationPct,
     HELIUS_RPC_URL: authenticatedHeliusRpcUrl(value.HELIUS_RPC_URL, value.HELIUS_API_KEY),
     keypair: Keypair.fromSecretKey(secret)
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isNonRetryableBuyError, retryEntryDeviationPct } from "../src/execution/buyRetryPolicy.js";
+import { isNonRetryableBuyError } from "../src/execution/buyRetryPolicy.js";
 
 describe("buy retry safety", () => {
   it("does not retry Pump buys rejected for excessive SOL", () => {
@@ -17,9 +17,5 @@ describe("buy retry safety", () => {
   it("does not confuse venue-specific custom errors", () => {
     expect(isNonRetryableBuyError(new Error('{"Custom":6002}'), "pumpswap")).toBe(false);
     expect(isNonRetryableBuyError(new Error('{"Custom":6004}'), "pump")).toBe(false);
-  });
-
-  it("measures retry movement from the original signal", () => {
-    expect(retryEntryDeviationPct(100, 110)).toBeCloseTo(10);
   });
 });

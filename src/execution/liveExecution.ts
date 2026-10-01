@@ -1,14 +1,14 @@
 import type { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
 import type { Logger } from "pino";
 import type { Strategy, StrategyExecution } from "../strategy/types.js";
-import { entryDeviationPct, entryMarketCapSol, isEntryMarketCapAllowed } from "./entryGuards.js";
+import { entryMarketCapSol, isEntryMarketCapAllowed } from "./entryGuards.js";
 import { TokenLifecycleState } from "../strategy/state.js";
 import type { TokenState } from "../state/tokenState.js";
 import type { BlockhashManager } from "./blockhashManager.js";
 import { ConfirmationTimeoutError, type ConfirmationTracker } from "./confirmationTracker.js";
 import type { HeliusSender, SenderTiming } from "../helius/sender.js";
 import type { RecoveryJournal } from "../recovery/journal.js";
-import { isNonRetryableBuyError, retryEntryDeviationPct } from "./buyRetryPolicy.js";
+import { isNonRetryableBuyError } from "./buyRetryPolicy.js";
 import type { PnlJournal } from "../pnl/pnlJournal.js";
 import { MintTradeLock } from "./mintTradeLock.js";
 
@@ -21,7 +21,6 @@ export class LiveStrategyExecution implements StrategyExecution {
     private readonly buyLamports: bigint,
     private readonly buySlippageBps: number,
     private readonly sellSlippageBps: number,
-    private readonly maxEntryDeviationPct: number,
     private readonly maxEntryMarketCapSol: number,
     private readonly blockhashes: BlockhashManager,
     private readonly sender: HeliusSender,
@@ -66,16 +65,6 @@ export class LiveStrategyExecution implements StrategyExecution {
             return;
           }
         }
-        if (attempt > 1 && state.prices.entrySignalPrice && state.prices.currentMarkPrice) {
-          const retryDeviationPct = retryEntryDeviationPct(state.prices.entrySignalPrice, state.prices.currentMarkPrice);
-          state.prices.expectedEntryPrice = state.prices.currentMarkPrice;
-          if (retryDeviationPct > this.maxEntryDeviationPct) {
-            const error = new Error(`buy retry aborted: latest price deviation ${retryDeviationPct.toFixed(4)}% exceeds ${this.maxEntryDeviationPct}%`);
-            this.logger.warn({ attempt, mint: state.descriptor.mint, entrySignalPrice: state.prices.entrySignalPrice, latestPrice: state.prices.currentMarkPrice, retryDeviationPct, maxDeviationPct: this.maxEntryDeviationPct }, "[05 ENTRY] Buy retry blocked by entry deviation limit");
-            this.#rejectBuy(state, "buy_retry_aborted", error);
-            return;
-          }
-        }
         if (attempt > 1 || !state.preparedBuy) {
           state.preparedBuy = await state.adapter.buildBuy({ descriptor: state.descriptor, owner: this.wallet.publicKey, lamports: state.buyLamports ?? this.buyLamports, slippageBps: buySlippage });
         }
@@ -90,7 +79,6 @@ export class LiveStrategyExecution implements StrategyExecution {
         state.actualTokenAmount = fill.tokenAmount;
         state.actualEntrySolAmount = fill.solAmount;
         state.prices.actualEntryFillPrice = fill.price;
-        if (state.prices.entrySignalPrice) state.prices.actualEntryDeviationPct = entryDeviationPct(fill.price, state.prices.entrySignalPrice);
         state.entryProcessedMs = Date.now();
         state.transition(TokenLifecycleState.BUY_PROCESSED);
         state.transition(TokenLifecycleState.POSITION_ACTIVE_UNCONFIRMED);
@@ -99,10 +87,6 @@ export class LiveStrategyExecution implements StrategyExecution {
         state.transition(TokenLifecycleState.POSITION_ACTIVE_CONFIRMED);
         this.#record(state, "buy_confirmed");
         this.#strategy?.onBuyFill?.(state, { price: fill.price, slot: 0 });
-        if ((state.prices.actualEntryDeviationPct ?? 0) > this.maxEntryDeviationPct && state.claimSellSend()) {
-          this.logger.error({ mint: state.descriptor.mint, entrySignalPrice: state.prices.entrySignalPrice, actualEntryFillPrice: fill.price, deviationPct: state.prices.actualEntryDeviationPct, maxDeviationPct: this.maxEntryDeviationPct }, "[07 POSITION] Entry deviation limit exceeded; exiting position");
-          await this.#sendSell(state, "ENTRY_DEVIATION", performance.now());
-        }
         return;
       } catch (error) {
         lastError = error;

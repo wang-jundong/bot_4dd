@@ -14,6 +14,5 @@ export function selectedStrategyNames(): readonly StrategyName[] {
 
 export const TRADE = {
   buySlippageBps: 1200,
-  sellSlippageBps: 5000,
-  maxEntryDeviationPct: 10
+  sellSlippageBps: 5000
 } as const;

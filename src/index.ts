@@ -45,7 +45,6 @@ const strategies = config.strategyPlans.map(plan => {
     plan.buyAmountLamports,
     config.buySlippageBps,
     config.sellSlippageBps,
-    config.maxEntryDeviationPct,
     plan.maxEntryMarketCapSol,
     blockhashes,
     sender,

@@ -5,9 +5,7 @@ import { EventBuffer } from "./eventBuffer.js";
 
 export interface PositionPrices {
   entrySignalPrice?: number;
-  expectedEntryPrice?: number;
   actualEntryFillPrice?: number;
-  actualEntryDeviationPct?: number;
   currentMarkPrice?: number;
   exitSignalPrice?: number;
   expectedExitPrice?: number;
@@ -77,9 +75,7 @@ export class TokenState {
     this.buySlippageBps = undefined;
     this.sellSlippageBps = undefined;
     this.prices.entrySignalPrice = undefined;
-    this.prices.expectedEntryPrice = undefined;
     this.prices.actualEntryFillPrice = undefined;
-    this.prices.actualEntryDeviationPct = undefined;
     this.prices.exitSignalPrice = undefined;
     this.prices.expectedExitPrice = undefined;
     this.prices.actualExitFillPrice = undefined;

@@ -189,7 +189,7 @@ export class StrategyV022Engine {
 
   /**
    * Python `on_sell_fill` is a no-op because the signal already moved the phase.
-   * A live exit that did not come from this engine (entry-deviation guard) is still HOLD.
+   * A live exit that did not come from this engine is still HOLD.
    */
   onSellFill(): void {
     if (this.st.phase !== PHASE_HOLD) return;
