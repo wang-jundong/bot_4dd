@@ -81,6 +81,15 @@ class SdkPreparedTransaction implements PreparedTradeTransaction {
   }
 }
 
+/** Absolute SOL spent/received by `owner` from confirmed tx meta (fees + tips included). No RPC. */
+export function ownerWalletSolAbsDelta(tx: VersionedTransactionResponse, owner: PublicKey): bigint | undefined {
+  if (!tx.meta) return undefined;
+  const ownerIndex = tx.transaction.message.staticAccountKeys.findIndex(key => key.equals(owner));
+  if (ownerIndex < 0) return undefined;
+  const solDelta = BigInt(tx.meta.postBalances[ownerIndex] ?? 0) - BigInt(tx.meta.preBalances[ownerIndex] ?? 0);
+  return solDelta < 0n ? -solDelta : solDelta;
+}
+
 abstract class PumpAdapterBase implements VenueAdapter {
   abstract readonly name: string;
   abstract readonly programId: PublicKey;
@@ -93,14 +102,12 @@ abstract class PumpAdapterBase implements VenueAdapter {
   parseFill(tx: unknown, owner: PublicKey, mint: string): FillResult {
     const parsed = tx as VersionedTransactionResponse;
     if (!parsed.meta || parsed.meta.err) return { tokenAmount: 0n, solAmount: 0n, price: 0, success: false };
-    const ownerIndex = parsed.transaction.message.staticAccountKeys.findIndex(key => key.equals(owner));
     const preToken = parsed.meta.preTokenBalances?.filter(balance => balance.owner === owner.toBase58() && balance.mint === mint)
       .reduce((sum, balance) => sum + BigInt(balance.uiTokenAmount.amount), 0n) ?? 0n;
     const postToken = parsed.meta.postTokenBalances?.filter(balance => balance.owner === owner.toBase58() && balance.mint === mint)
       .reduce((sum, balance) => sum + BigInt(balance.uiTokenAmount.amount), 0n) ?? 0n;
     const tokenAmount = postToken >= preToken ? postToken - preToken : preToken - postToken;
-    const solDelta = ownerIndex < 0 ? 0n : BigInt(parsed.meta.postBalances[ownerIndex] ?? 0) - BigInt(parsed.meta.preBalances[ownerIndex] ?? 0);
-    const solAmount = solDelta < 0n ? -solDelta : solDelta;
+    const solAmount = ownerWalletSolAbsDelta(parsed, owner) ?? 0n;
     return { tokenAmount, solAmount, price: tokenAmount === 0n ? 0 : Number(solAmount) / Number(tokenAmount), success: tokenAmount > 0n };
   }
   abstract buildBuy(args: BuildBuyArgs): Promise<PreparedTradeTransaction>;
@@ -134,8 +141,10 @@ export class PumpBondingCurveAdapter extends PumpAdapterBase {
       if (data.mint.toBase58() !== mint || !data.user.equals(owner)) continue;
       this.#noteTrade(data);
       const tokenAmount = BigInt(data.tokenAmount.toString(10));
-      const solAmount = BigInt(data.solAmount.toString(10));
-      return { tokenAmount, solAmount, price: tokenAmount === 0n ? 0 : Number(solAmount) / Number(tokenAmount), success: tokenAmount > 0n };
+      const eventSol = BigInt(data.solAmount.toString(10));
+      // Journal / position SOL uses wallet delta so PnL matches cash (fees + tips). Price stays curve fill.
+      const solAmount = ownerWalletSolAbsDelta(parsed, owner) ?? eventSol;
+      return { tokenAmount, solAmount, price: tokenAmount === 0n ? 0 : Number(eventSol) / Number(tokenAmount), success: tokenAmount > 0n };
     }
     return super.parseFill(tx, owner, mint);
   }
@@ -246,8 +255,10 @@ export class PumpSwapAdapter extends PumpAdapterBase {
       if (!base || !quote) continue;
       this.#noteTrade(mint, data);
       const tokenAmount = BigInt(base.toString(10));
-      const solAmount = BigInt(quote.toString(10));
-      return { tokenAmount, solAmount, price: tokenAmount === 0n ? 0 : Number(solAmount) / Number(tokenAmount), success: tokenAmount > 0n };
+      const eventSol = BigInt(quote.toString(10));
+      // Journal / position SOL uses wallet delta so PnL matches cash (fees + tips). Price stays pool fill.
+      const solAmount = ownerWalletSolAbsDelta(parsed, owner) ?? eventSol;
+      return { tokenAmount, solAmount, price: tokenAmount === 0n ? 0 : Number(eventSol) / Number(tokenAmount), success: tokenAmount > 0n };
     }
     return super.parseFill(tx, owner, mint);
   }

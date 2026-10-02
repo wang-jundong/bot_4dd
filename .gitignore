@@ -5,6 +5,7 @@ recovery/*.jsonl
 *.log
 logs/*.txt
 logs/*.jsonl
+logs/*.json
 secrets/
 *.key
 *.bin
