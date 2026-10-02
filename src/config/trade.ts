@@ -6,7 +6,7 @@
  */
 export const STRATEGY_NAMES = ["strategy_v_011", "strategy_v_022"] as const;
 export type StrategyName = (typeof STRATEGY_NAMES)[number];
-export const ACTIVE_STRATEGY: StrategyName | "both" = "both";
+export const ACTIVE_STRATEGY: StrategyName | "both" = "strategy_v_011";
 
 export function selectedStrategyNames(): readonly StrategyName[] {
   return ACTIVE_STRATEGY === "both" ? STRATEGY_NAMES : [ACTIVE_STRATEGY];
