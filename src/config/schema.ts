@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { selectedStrategyNames, type StrategyName } from "./trade.js";
 
 const numeric = (min = -Number.MAX_VALUE) => z.coerce.number().finite().min(min);
 const integer = (min = 0) => z.coerce.number().int().min(min);
@@ -15,10 +16,13 @@ export const envSchema = z.object({
   HELIUS_SENDER_SWQOS_ONLY: bool.default("true"),
   /** Fernet key file path (same role as cryptotrading_prod SIG_KEYS[*].key_file). */
   WALLET_KEY_FILE: z.string().min(1).default("./secrets/solana.key"),
-  /** Fernet ciphertext of XOR(private_key). Prefer this over plaintext. */
-  TRADING_PRIVATE_KEY_ENCRYPTED: z.string().optional().default(""),
-  /** Legacy plaintext base58 — only used if ENCRYPTED is empty (local/dev escape hatch). */
-  TRADING_PRIVATE_KEY_BASE58: z.string().optional().default(""),
+  /** Fernet ciphertext of XOR(private_key) for strategy_v_011. */
+  STRATEGY_V_011_PRIVATE_KEY_ENCRYPTED: z.string().optional().default(""),
+  /** Legacy plaintext base58 — only used if that strategy's ENCRYPTED value is empty. */
+  STRATEGY_V_011_PRIVATE_KEY_BASE58: z.string().optional().default(""),
+  /** Fernet ciphertext of XOR(private_key) for strategy_v_022. */
+  STRATEGY_V_022_PRIVATE_KEY_ENCRYPTED: z.string().optional().default(""),
+  STRATEGY_V_022_PRIVATE_KEY_BASE58: z.string().optional().default(""),
   PRIORITY_FEE_LAMPORTS: integer(1),
   HELIUS_TIP_LAMPORTS: integer(5000).default(5000),
   COMPUTE_UNIT_LIMIT: integer(1),
@@ -31,11 +35,23 @@ export const envSchema = z.object({
   if (!v.HELIUS_SENDER_SWQOS_ONLY && v.HELIUS_TIP_LAMPORTS < 1_000_000) {
     ctx.addIssue({ code: "custom", path: ["HELIUS_TIP_LAMPORTS"], message: "Sender Max requires at least 1000000 tip lamports" });
   }
-  if (!v.TRADING_PRIVATE_KEY_ENCRYPTED.trim() && !v.TRADING_PRIVATE_KEY_BASE58.trim()) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["TRADING_PRIVATE_KEY_ENCRYPTED"],
-      message: "set TRADING_PRIVATE_KEY_ENCRYPTED (+ WALLET_KEY_FILE) or legacy TRADING_PRIVATE_KEY_BASE58"
-    });
+  for (const name of selectedStrategyNames()) {
+    const fields = strategyWalletFields(name);
+    if (!v[fields.encrypted].trim() && !v[fields.plain].trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: [fields.encrypted],
+        message: `set ${fields.encrypted} (+ WALLET_KEY_FILE) or ${fields.plain}`
+      });
+    }
   }
 });
+
+export function strategyWalletFields(name: StrategyName): {
+  encrypted: "STRATEGY_V_011_PRIVATE_KEY_ENCRYPTED" | "STRATEGY_V_022_PRIVATE_KEY_ENCRYPTED";
+  plain: "STRATEGY_V_011_PRIVATE_KEY_BASE58" | "STRATEGY_V_022_PRIVATE_KEY_BASE58";
+} {
+  return name === "strategy_v_022"
+    ? { encrypted: "STRATEGY_V_022_PRIVATE_KEY_ENCRYPTED", plain: "STRATEGY_V_022_PRIVATE_KEY_BASE58" }
+    : { encrypted: "STRATEGY_V_011_PRIVATE_KEY_ENCRYPTED", plain: "STRATEGY_V_011_PRIVATE_KEY_BASE58" };
+}

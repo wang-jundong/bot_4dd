@@ -18,6 +18,10 @@ export function journalRecordMatchesStrategy(recordStrategy: string | undefined,
   return activeNames[0] === slotName;
 }
 
+function walletMintKey(owner: PublicKey, mint: string): string {
+  return `${owner.toBase58()}:${mint}`;
+}
+
 interface StrategySlot {
   name: string;
   strategy: Strategy;
@@ -25,6 +29,7 @@ interface StrategySlot {
   poolNeeded: Map<string, boolean>;
   buyAmountLamports: bigint;
   targetWallet: string;
+  owner: PublicKey;
 }
 
 interface RecoveredOpen {
@@ -56,7 +61,7 @@ export class TradingRuntime {
     private readonly decoder: PumpTradeDecoder,
     adapters: readonly VenueAdapter[],
     private readonly logger: Logger,
-    strategies: readonly { name: string; strategy: Strategy; buyAmountLamports: bigint; targetWallet: string }[]
+    strategies: readonly { name: string; strategy: Strategy; buyAmountLamports: bigint; targetWallet: string; owner: PublicKey }[]
   ) {
     this.#adapters = new Map(adapters.map(adapter => [adapter.name, adapter]));
     this.#slots = strategies.map(entry => ({
@@ -65,7 +70,8 @@ export class TradingRuntime {
       states: new TokenStateManager(config.EVENT_RETENTION_SEC * 1000),
       poolNeeded: new Map(),
       buyAmountLamports: entry.buyAmountLamports,
-      targetWallet: entry.targetWallet
+      targetWallet: entry.targetWallet,
+      owner: entry.owner
     }));
     for (const slot of this.#slots) {
       slot.strategy.setPoolTape?.((state, needed, fromSlot) => {
@@ -179,16 +185,17 @@ export class TradingRuntime {
     const walletByMint = new Map<string, bigint>();
     for (const open of opens) {
       const mint = open.record.descriptor?.mint;
-      if (!mint || walletByMint.has(mint)) continue;
-      walletByMint.set(mint, await this.#walletTokenAmount(mint));
+      const key = mint ? walletMintKey(open.slot.owner, mint) : "";
+      if (!mint || walletByMint.has(key)) continue;
+      walletByMint.set(key, await this.#walletTokenAmount(open.slot.owner, mint));
     }
     for (const open of opens) {
       const descriptor = open.record.descriptor;
       if (!descriptor) continue;
-      const others = opens.filter(candidate => candidate !== open && candidate.record.descriptor?.mint === descriptor.mint);
+      const others = opens.filter(candidate => candidate !== open && candidate.record.descriptor?.mint === descriptor.mint && candidate.slot.owner.equals(open.slot.owner));
       const tokenAmount = allocateRecoveredTokens(
         open.recordedAmount,
-        walletByMint.get(descriptor.mint) ?? 0n,
+        walletByMint.get(walletMintKey(open.slot.owner, descriptor.mint)) ?? 0n,
         others.reduce((sum, candidate) => sum + candidate.recordedAmount, 0n),
         others.filter(candidate => candidate.recordedAmount === 0n).length
       );
@@ -228,7 +235,7 @@ export class TradingRuntime {
       if (recordedAmount === 0n && record.signature) {
         const tx = await this.connection.getTransaction(record.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
         if (tx && !tx.meta?.err) {
-          const fill = adapter.parseFill(tx, this.config.keypair.publicKey, descriptor.mint);
+          const fill = adapter.parseFill(tx, slot.owner, descriptor.mint);
           recordedAmount = fill.tokenAmount;
           if (entryPrice <= 0) entryPrice = fill.price;
         }
@@ -247,8 +254,8 @@ export class TradingRuntime {
     return opens;
   }
 
-  async #walletTokenAmount(mint: string): Promise<bigint> {
-    const accounts = await this.connection.getParsedTokenAccountsByOwner(this.config.keypair.publicKey, { mint: new PublicKey(mint) }, "confirmed");
+  async #walletTokenAmount(owner: PublicKey, mint: string): Promise<bigint> {
+    const accounts = await this.connection.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(mint) }, "confirmed");
     return accounts.value.reduce((sum, account) => sum + BigInt(account.account.data.parsed.info.tokenAmount.amount as string), 0n);
   }
 

@@ -41,7 +41,7 @@ const mintTrades = new MintTradeLock();
 const strategies = config.strategyPlans.map(plan => {
   const execution = new LiveStrategyExecution(
     connection,
-    config.keypair,
+    plan.keypair,
     plan.buyAmountLamports,
     config.buySlippageBps,
     config.sellSlippageBps,
@@ -56,10 +56,10 @@ const strategies = config.strategyPlans.map(plan => {
     mintTrades
   );
   const strategy: Strategy = plan.name === "strategy_v_022"
-    ? new StrategyV022Live(config.strategyV022, execution, config.keypair, plan.targetWallet, config.buySlippageBps, config.sellSlippageBps, canOpen, logger)
-    : new StrategyV011Live(config.strategyV011, execution, config.keypair, plan.targetWallet, config.buySlippageBps, config.sellSlippageBps, canOpen, logger);
+    ? new StrategyV022Live(config.strategyV022, execution, plan.keypair, plan.targetWallet, config.buySlippageBps, config.sellSlippageBps, canOpen, logger)
+    : new StrategyV011Live(config.strategyV011, execution, plan.keypair, plan.targetWallet, config.buySlippageBps, config.sellSlippageBps, canOpen, logger);
   execution.bindStrategy(strategy);
-  return { name: plan.name, strategy, buyAmountLamports: plan.buyAmountLamports, targetWallet: plan.targetWallet };
+  return { name: plan.name, strategy, buyAmountLamports: plan.buyAmountLamports, targetWallet: plan.targetWallet, owner: plan.keypair.publicKey };
 });
 runtime = new TradingRuntime(config, connection, vibe, journal, new PumpTradeDecoder(connection), adapters, logger, strategies);
 
@@ -98,7 +98,11 @@ logger.info({
 
 blockhashes.start(error => logger.error({ err: error instanceof Error ? error.message : String(error) }, "[01 STARTUP] Blockhash refresh failed"));
 await runtime.start();
-logger.info({ wallet: config.keypair.publicKey.toBase58(), strategy: config.strategy, swqosOnly: config.HELIUS_SENDER_SWQOS_ONLY }, `[01 STARTUP] Bot ready; ${config.strategy} active`);
+logger.info({
+  wallets: Object.fromEntries(config.strategyPlans.map(plan => [plan.name, plan.keypair.publicKey.toBase58()])),
+  strategy: config.strategy,
+  swqosOnly: config.HELIUS_SENDER_SWQOS_ONLY
+}, `[01 STARTUP] Bot ready; ${config.strategy} active`);
 
 let closing = false;
 async function shutdown(): Promise<void> {

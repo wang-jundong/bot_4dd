@@ -1,4 +1,4 @@
-/** One in-flight buy or sell per mint, shared by every strategy on this wallet. */
+/** One in-flight buy or sell per key. Live execution keys by wallet and mint. */
 export class MintTradeLock {
   readonly #tails = new Map<string, Promise<void>>();
 

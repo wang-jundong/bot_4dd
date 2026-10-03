@@ -41,11 +41,16 @@ export class LiveStrategyExecution implements StrategyExecution {
   }
 
   sendBuy(state: TokenState, signalMonoMs: number): Promise<void> {
-    return this.mintTrades.run(state.descriptor.mint, () => this.#sendBuy(state, signalMonoMs));
+    return this.mintTrades.run(this.#tradeKey(state.descriptor.mint), () => this.#sendBuy(state, signalMonoMs));
   }
 
   sendSell(state: TokenState, reason: string, signalMonoMs: number): Promise<void> {
-    return this.mintTrades.run(state.descriptor.mint, () => this.#sendSell(state, reason, signalMonoMs));
+    return this.mintTrades.run(this.#tradeKey(state.descriptor.mint), () => this.#sendSell(state, reason, signalMonoMs));
+  }
+
+  /** Same wallet still trades one mint at a time. A different wallet can trade that mint in parallel. */
+  #tradeKey(mint: string): string {
+    return `${this.wallet.publicKey.toBase58()}:${mint}`;
   }
 
   async #sendBuy(state: TokenState, signalMonoMs: number): Promise<void> {

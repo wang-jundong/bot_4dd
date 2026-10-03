@@ -1,7 +1,7 @@
 import "dotenv/config";
 import bs58 from "bs58";
 import { Keypair } from "@solana/web3.js";
-import { envSchema } from "./schema.js";
+import { envSchema, strategyWalletFields } from "./schema.js";
 import { ACTIVE_STRATEGY, selectedStrategyNames, type StrategyName, TRADE } from "./trade.js";
 import { loadStrategyV011Config } from "./strategyV011.js";
 import { loadStrategyV022Config } from "./strategyV022.js";
@@ -15,10 +15,19 @@ export function authenticatedHeliusRpcUrl(rpcUrl: string, apiKey: string): strin
   return url.toString();
 }
 
+type WalletEnv = {
+  WALLET_KEY_FILE: string;
+  STRATEGY_V_011_PRIVATE_KEY_ENCRYPTED: string;
+  STRATEGY_V_011_PRIVATE_KEY_BASE58: string;
+  STRATEGY_V_022_PRIVATE_KEY_ENCRYPTED: string;
+  STRATEGY_V_022_PRIVATE_KEY_BASE58: string;
+};
+
 function strategyPlan(
   name: StrategyName,
   strategyV011: ReturnType<typeof loadStrategyV011Config>,
-  strategyV022: ReturnType<typeof loadStrategyV022Config>
+  strategyV022: ReturnType<typeof loadStrategyV022Config>,
+  env: WalletEnv
 ) {
   const sizeSol = name === "strategy_v_022"
     ? strategyV022.size_sol
@@ -29,21 +38,23 @@ function strategyPlan(
   if (buyAmountLamports <= 0n) throw new Error(`${name} size must be positive`);
   if (maxEntryMarketCapSol <= 0) throw new Error(`${name} max market cap must be positive`);
   if (targetWallet.trim().length < 32) throw new Error(`${name} gate_wallet is missing`);
-  return { name, buyAmountLamports, maxEntryMarketCapSol, targetWallet: targetWallet.trim() };
+  return { name, buyAmountLamports, maxEntryMarketCapSol, targetWallet: targetWallet.trim(), keypair: resolveTradingKeypair(name, env) };
 }
 
-function loadTradingPrivateKeyBase58(env: {
-  TRADING_PRIVATE_KEY_ENCRYPTED: string;
-  TRADING_PRIVATE_KEY_BASE58: string;
-  WALLET_KEY_FILE: string;
-}): string {
-  const encrypted = env.TRADING_PRIVATE_KEY_ENCRYPTED.trim();
-  if (encrypted) {
-    return decryptTradingPrivateKey(encrypted, env.WALLET_KEY_FILE).trim();
-  }
-  const plain = env.TRADING_PRIVATE_KEY_BASE58.trim();
-  if (plain) return plain;
-  throw new Error("No trading private key configured");
+function readPrivateKey(encrypted: string, plain: string, keyFile: string): string | undefined {
+  const ciphertext = encrypted.trim();
+  if (ciphertext) return decryptTradingPrivateKey(ciphertext, keyFile).trim();
+  const base58 = plain.trim();
+  return base58 || undefined;
+}
+
+export function resolveTradingKeypair(name: StrategyName, env: WalletEnv): Keypair {
+  const fields = strategyWalletFields(name);
+  const base58 = readPrivateKey(env[fields.encrypted], env[fields.plain], env.WALLET_KEY_FILE);
+  if (!base58) throw new Error(`${name} has no trading wallet; set ${fields.encrypted}`);
+  const secret = bs58.decode(base58);
+  if (secret.length !== 64) throw new Error(`${name} trading private key must decode to 64 bytes`);
+  return Keypair.fromSecretKey(secret);
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -51,10 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const strategyV011 = loadStrategyV011Config();
   const strategyV022 = loadStrategyV022Config();
   const strategy = ACTIVE_STRATEGY;
-  const strategyPlans = selectedStrategyNames().map(name => strategyPlan(name, strategyV011, strategyV022));
-  const privateKeyBase58 = loadTradingPrivateKeyBase58(value);
-  const secret = bs58.decode(privateKeyBase58);
-  if (secret.length !== 64) throw new Error("Trading private key must decode to 64 bytes");
+  const strategyPlans = selectedStrategyNames().map(name => strategyPlan(name, strategyV011, strategyV022, value));
   return Object.freeze({
     ...value,
     strategy,
@@ -63,7 +71,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     strategyV022,
     buySlippageBps: TRADE.buySlippageBps,
     sellSlippageBps: TRADE.sellSlippageBps,
-    HELIUS_RPC_URL: authenticatedHeliusRpcUrl(value.HELIUS_RPC_URL, value.HELIUS_API_KEY),
-    keypair: Keypair.fromSecretKey(secret)
+    HELIUS_RPC_URL: authenticatedHeliusRpcUrl(value.HELIUS_RPC_URL, value.HELIUS_API_KEY)
   });
 }
