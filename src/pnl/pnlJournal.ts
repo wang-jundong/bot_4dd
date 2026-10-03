@@ -1,5 +1,5 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { PositionPrices } from "../state/tokenState.js";
 import type { PoolDescriptor } from "../venues/types.js";
 
@@ -91,82 +91,15 @@ export function createPnlRecord(input: ClosedTradePnlInput): PnlRecord {
   };
 }
 
-export interface DailyStrategyPnl {
-  date: string;
-  strategy: string;
-  trades: number;
-  wins: number;
-  losses: number;
-  flats: number;
-  buyLamports: string;
-  sellLamports: string;
-  pnlLamports: string;
-  pnlSol: number;
-}
-
-export interface DailyPnlFile {
-  timezone: "UTC";
-  days: DailyStrategyPnl[];
-}
-
-export function utcDate(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-export function dailyPnlPath(pnlPath: string): string {
-  return join(dirname(pnlPath), "pnl-daily.json");
-}
-
-export function summarizeDailyPnl(records: readonly PnlRecord[]): DailyPnlFile {
-  const groups = new Map<string, { date: string; strategy: string; trades: number; wins: number; losses: number; flats: number; buy: bigint; sell: bigint }>();
-  for (const record of records) {
-    const date = utcDate(record.timestampMs);
-    const strategy = record.strategy || "unknown";
-    const key = `${date}\0${strategy}`;
-    const group = groups.get(key) ?? { date, strategy, trades: 0, wins: 0, losses: 0, flats: 0, buy: 0n, sell: 0n };
-    group.trades += 1;
-    if (record.outcome === "win") group.wins += 1;
-    else if (record.outcome === "loss") group.losses += 1;
-    else group.flats += 1;
-    group.buy += BigInt(record.buyLamports);
-    group.sell += BigInt(record.sellLamports);
-    groups.set(key, group);
-  }
-  const days = [...groups.values()].map(group => {
-    const pnlLamports = group.sell - group.buy;
-    return {
-      date: group.date,
-      strategy: group.strategy,
-      trades: group.trades,
-      wins: group.wins,
-      losses: group.losses,
-      flats: group.flats,
-      buyLamports: group.buy.toString(),
-      sellLamports: group.sell.toString(),
-      pnlLamports: pnlLamports.toString(),
-      pnlSol: Number(pnlLamports) / LAMPORTS_PER_SOL
-    };
-  }).sort((a, b) => a.date.localeCompare(b.date) || a.strategy.localeCompare(b.strategy));
-  return { timezone: "UTC", days };
-}
-
 export class PnlJournal {
   #pending: Promise<void> = Promise.resolve();
-  readonly dailyPath: string;
-  constructor(private readonly path: string, dailyPath = dailyPnlPath(path)) {
-    this.dailyPath = dailyPath;
-  }
+  constructor(private readonly path: string) {}
 
-  record(input: ClosedTradePnlInput): Promise<DailyStrategyPnl> {
+  record(input: ClosedTradePnlInput): Promise<void> {
     const line = JSON.stringify(createPnlRecord(input)) + "\n";
     const write = this.#pending.then(async () => {
       await mkdir(dirname(this.path), { recursive: true });
       await appendFile(this.path, line);
-      const summary = summarizeDailyPnl(await this.#readFile());
-      await writeFile(this.dailyPath, JSON.stringify(summary, null, 2) + "\n");
-      const day = summary.days.find(entry => entry.date === utcDate(input.closedAtMs) && entry.strategy === input.strategy);
-      if (!day) throw new Error(`daily PNL missing for ${input.strategy} ${utcDate(input.closedAtMs)}`);
-      return day;
     });
     this.#pending = write.then(() => undefined, () => undefined);
     return write;

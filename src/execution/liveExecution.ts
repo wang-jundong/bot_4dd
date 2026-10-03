@@ -122,7 +122,7 @@ export class LiveStrategyExecution implements StrategyExecution {
         const closedAtMs = Date.now();
         if (state.actualEntrySolAmount && state.prices.actualEntryFillPrice && state.entryProcessedMs) {
           try {
-            const day = await this.pnlJournal.record({
+            await this.pnlJournal.record({
               strategy: this.strategyName,
               closedAtMs,
               descriptor: state.descriptor,
@@ -137,7 +137,7 @@ export class LiveStrategyExecution implements StrategyExecution {
               sellSignature: state.sellSignature,
               entryProcessedMs: state.entryProcessedMs
             });
-            this.logger.info({ mint: state.descriptor.mint, strategy: this.strategyName, date: day.date, pnlLamports: fill.solAmount - state.actualEntrySolAmount, dayPnlLamports: day.pnlLamports, dayTrades: day.trades }, "[PNL] Closed trade appended");
+            this.logger.info({ mint: state.descriptor.mint, strategy: this.strategyName, pnlLamports: fill.solAmount - state.actualEntrySolAmount }, "[PNL] Closed trade appended");
           } catch (error) {
             this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[PNL] Failed to append closed trade");
           }
