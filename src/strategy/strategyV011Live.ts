@@ -92,6 +92,10 @@ export class StrategyV011Live implements Strategy {
     if (engine.isDone) this.#markClosed(state, engine.lastSkip || "buy failed");
   }
 
+  onSellFailed(state: TokenState): void {
+    this.#engines.get(state)?.onSellFailed();
+  }
+
   onSellFill(state: TokenState): { thenBuy: boolean } {
     const engine = this.#engines.get(state);
     if (!engine) return { thenBuy: false };

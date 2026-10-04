@@ -101,6 +101,36 @@ describe("strategy_v_022 engine", () => {
     expect(target.phaseName).toBe("idle");
   });
 
+  it("retries a failed sell once the cooldown passes", () => {
+    const t0 = 1_700_000_000_000;
+    const cluster = bound({ take_profit: 0 });
+    arm(cluster);
+    cluster.onBuyFill();
+    cluster.onEvent(print({ side: "BUY", solAmount: 2, timestampMs: t0, signature: "b1" }));
+    cluster.onEvent(print({ side: "BUY", solAmount: 2, timestampMs: t0, signature: "b2" }));
+    expect(cluster.onEvent(print({ side: "BUY", solAmount: 2, timestampMs: t0, signature: "b3" }))).toBe("SELL");
+    expect(cluster.phaseName).toBe("wait");
+    cluster.onSellFailed(t0);
+    expect(cluster.phaseName).toBe("hold");
+    expect(cluster.needsPoolTape()).toBe(true);
+    expect(cluster.onEvent(print({ side: "BUY", solAmount: 2, timestampMs: t0 + 1_000, signature: "during" }))).toBeNull();
+    expect(cluster.onClock(t0 + 1_000)).toBeNull();
+    expect(cluster.phaseName).toBe("hold");
+    expect(cluster.onClock(t0 + 2_000)).toBe("SELL");
+    expect(cluster.phaseName).toBe("wait");
+    expect(cluster.lastSellReason).toContain("sell_hit");
+
+    const target = bound({ take_profit: 0 });
+    arm(target);
+    target.onBuyFill();
+    expect(target.onEvent(print({ side: "SELL", wallet: "target", solAmount: 0.05, tokenAmount: 1, timestampMs: t0, signature: "ts" }))).toBe("SELL");
+    expect(target.phaseName).toBe("idle");
+    target.onSellFailed(t0);
+    expect(target.phaseName).toBe("hold");
+    expect(target.onClock(t0 + 2_000)).toBe("SELL");
+    expect(target.lastSellReason).toBe("target_sell");
+  });
+
   it("leaves our own prints out of the sell run and the three-buy exit", () => {
     const engine = bound({ buy_hit_round: 1 }, "me");
     engine.onEvent(print({ solAmount: 0.6, signature: "s1" }));

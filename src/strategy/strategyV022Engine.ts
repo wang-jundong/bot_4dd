@@ -34,6 +34,8 @@ const SIDE_SELL = 2;
 const MAX_SELL_FRAC = 0.95;
 
 const PHASE_NAMES = ["idle", "seek_sell", "pending", "hold", "wait"] as const;
+/** After a failed sell, wait before resubmitting so a quiet market is not hammered every tick. */
+const SELL_RETRY_MS = 2_000;
 
 export type StrategyV022Phase = (typeof PHASE_NAMES)[number];
 
@@ -127,6 +129,9 @@ export class StrategyV022Engine {
   private buyReason = "";
   private sellReason = "";
   private buyDiag: Record<string, unknown> = {};
+  /** Set when a live sell failed and the bag is still open. The next clock resubmits that exit. */
+  private exitRetry = false;
+  private exitRetryAtMs = 0;
 
   constructor(cfg: StrategyV022Config, ownWallet = "") {
     this.cfg = cfg;
@@ -140,7 +145,7 @@ export class StrategyV022Engine {
 
   /** Other wallets' prints matter only while a sell-run or an exit is in progress. */
   needsPoolTape(): boolean {
-    return this.st.phase === PHASE_SEEK_SELL || this.st.phase === PHASE_PENDING || this.st.phase === PHASE_HOLD;
+    return this.exitRetry || this.st.phase === PHASE_SEEK_SELL || this.st.phase === PHASE_PENDING || this.st.phase === PHASE_HOLD;
   }
 
   get isBound(): boolean {
@@ -192,10 +197,31 @@ export class StrategyV022Engine {
    * A live exit that did not come from this engine is still HOLD.
    */
   onSellFill(): void {
+    this.exitRetry = false;
     if (this.st.phase !== PHASE_HOLD) return;
     this.st.phase = PHASE_WAIT;
     this.st.why = "external_exit";
     clearStreak(this.st);
+  }
+
+  /**
+   * The sell transaction failed and the tokens are still held.
+   * The signal already left HOLD, so put the exit back and resubmit once the cooldown passes.
+   */
+  onSellFailed(nowMs: number): void {
+    this.exitRetry = true;
+    this.exitRetryAtMs = nowMs + SELL_RETRY_MS;
+    this.st.phase = PHASE_HOLD;
+    clearStreak(this.st);
+  }
+
+  /** Resubmit a failed exit once `nowMs` is past the cooldown. No-op otherwise. */
+  onClock(nowMs: number): "SELL" | null {
+    if (!this.exitRetry || nowMs < this.exitRetryAtMs) return null;
+    this.exitRetry = false;
+    this.st.phase = PHASE_WAIT;
+    clearStreak(this.st);
+    return "SELL";
   }
 
   /** Target's max sell landed while the buy was still pending. Apply that exit once the fill is HOLD. */
@@ -218,6 +244,7 @@ export class StrategyV022Engine {
 
   onEvent(event: StrategyV022MarketEvent): "BUY" | "SELL" | null {
     if (!this.bound) return null;
+    if (this.exitRetry) return null;
     const side = event.side === "BUY" ? SIDE_BUY : event.side === "SELL" ? SIDE_SELL : 0;
     const isTarget = Boolean(this.targetWallet) && event.wallet === this.targetWallet && (side === SIDE_BUY || side === SIDE_SELL);
     const isOwn = Boolean(this.ownWallet) && event.wallet === this.ownWallet;

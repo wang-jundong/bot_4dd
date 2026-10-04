@@ -81,6 +81,28 @@ describe("strategy_v_011 engine", () => {
     if (decision.kind === "fire_sell") expect(decision.reason).toContain("rule_1_mark_tp");
   });
 
+  it("retries an exit after the sell fails", () => {
+    const engine = new StrategyV011Engine(cfg());
+    const t0 = 1_700_000_000_000;
+    engine.bindGateBuy({
+      price: 50e-9,
+      sol: 3.0,
+      tsSec: 1_700_000_000,
+      wallet: "target",
+      gateSig: "gate",
+      nowMs: t0
+    });
+    engine.onTimer(50e-9, t0 + 6_000);
+    engine.onBuyFill(50e-9, 1_700_000_006, 10);
+    const first = engine.onTimer(50e-9 * 1.55, t0 + 7_000);
+    expect(first.kind).toBe("fire_sell");
+    engine.onSellFailed();
+    expect(engine.onTimer(50e-9 * 1.55, t0 + 7_000).kind).toBe("none");
+    const retry = engine.onTimer(50e-9 * 1.55, t0 + 9_000);
+    expect(retry.kind).toBe("fire_sell");
+    expect(engine.phaseName).toBe(PHASE_HOLDING);
+  });
+
   it("aborts when the target sells before our buy", () => {
     const engine = new StrategyV011Engine(cfg());
     engine.bindGateBuy({

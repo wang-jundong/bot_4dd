@@ -83,7 +83,7 @@ export class PumpTradeDecoder {
         quoteMint: data.quoteMint?.toBase58(),
         protocolFeeBps: data.feeBasisPoints ? bnBigInt(data.feeBasisPoints) : 0n,
         creatorFeeBps: data.creatorFeeBasisPoints ? bnBigInt(data.creatorFeeBasisPoints) : 0n,
-        feeRecipient: data.feeRecipient?.toBase58(),
+        feeRecipient: data.feeRecipient && !data.feeRecipient.equals(PublicKey.default) ? data.feeRecipient.toBase58() : undefined,
         cashback: data.cashbackFeeBasisPoints ? !data.cashbackFeeBasisPoints.isZero() : false
       };
     }

@@ -16,6 +16,8 @@ export interface Strategy {
   onBuyFailed?(state: TokenState): void | { rearm?: boolean };
   /** `thenBuy` is strategy_v_011's scalp re-entry. `rearm` keeps strategy_v_022 watching for the next target buy. */
   onSellFill?(state: TokenState): { thenBuy?: boolean; rearm?: boolean };
+  /** Sell attempts are exhausted and the position is still open. strategy_v_011 uses this to arm another exit. */
+  onSellFailed?(state: TokenState): void;
   onThenBuy?(state: TokenState): Promise<void> | void;
   restoreOpenPosition?(state: TokenState, fillPriceLive: number): void;
   /** `needed` is false once this mint only cares about the target wallet. */

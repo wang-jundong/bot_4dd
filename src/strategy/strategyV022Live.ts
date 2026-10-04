@@ -49,7 +49,13 @@ export class StrategyV022Live implements Strategy {
     void this.#dispatch(state, engine, signal);
   }
 
-  onClock(): void {}
+  onClock(state: TokenState, nowMs = Date.now()): void {
+    const engine = this.#engines.get(state);
+    if (!engine || this.#busy.has(state) || !isHolding(state)) return;
+    const signal = engine.onClock(nowMs);
+    this.#syncPool(state, engine);
+    if (signal === "SELL") void this.#dispatch(state, engine, signal);
+  }
 
   onBuyFill(state: TokenState, fill?: { price: number; slot: number }): void {
     const engine = this.#engines.get(state);
@@ -65,6 +71,13 @@ export class StrategyV022Live implements Strategy {
     engine?.onBuyFailed();
     if (engine) this.#syncPool(state, engine);
     return { rearm: true };
+  }
+
+  onSellFailed(state: TokenState): void {
+    const engine = this.#engines.get(state);
+    if (!engine) return;
+    engine.onSellFailed(Date.now());
+    this.#syncPool(state, engine);
   }
 
   onSellFill(state: TokenState): { rearm: boolean } {
@@ -164,6 +177,7 @@ export class StrategyV022Live implements Strategy {
     } catch (error) {
       this.logger.error({ err: error instanceof Error ? error.message : String(error), mint: state.descriptor.mint }, "[08 EXIT] strategy_v_022 sell failed");
       state.releaseSellSend();
+      this.onSellFailed(state);
     } finally {
       this.#busy.delete(state);
     }

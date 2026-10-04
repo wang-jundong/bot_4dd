@@ -64,6 +64,9 @@ export class StrategyV011Engine {
   private peakPrice = 0.0;
   private fillsSlot = 0;
   private exitInFlight = false;
+  /** After a failed sell, wait before the next exit so a still-true signal does not resubmit every tick. */
+  private sellRetryAtMs = 0;
+  private static readonly SELL_RETRY_MS = 2_000;
   private pendingRule1TargetBuyExitSol: number | null = null;
   private dumpArmMs: number | null = null;
   private targetWallet = "";
@@ -182,6 +185,7 @@ export class StrategyV011Engine {
     this.fillsSlot = Math.trunc(fillSlot);
     this.phase = PHASE_HOLDING;
     this.exitInFlight = false;
+    this.sellRetryAtMs = 0;
     if (this.scalpEntryPending) {
       this.holdingScalp = true;
       this.scalpHoldT0Ms = this._nowMs;
@@ -221,6 +225,16 @@ export class StrategyV011Engine {
     }
     this.phase = PHASE_DONE;
     this.entryDone = true;
+  }
+
+  onSellFailed(): void {
+    this.exitInFlight = false;
+    this._pendingThenBuy = false;
+    if (this.scalpEntryPending && !this.holdingScalp) {
+      this.scalpEntryPending = false;
+      this.scalpDone = false;
+    }
+    this.sellRetryAtMs = this._nowMs + StrategyV011Engine.SELL_RETRY_MS;
   }
 
   onSellFill(): void {
@@ -771,9 +785,13 @@ export class StrategyV011Engine {
 
   // ---- holds ----
 
+  private exitBlocked(): boolean {
+    return this.exitInFlight || this._nowMs < this.sellRetryAtMs;
+  }
+
   private onHoldMark(px: number): StrategyDecision {
     const cfg = this.cfg;
-    if (this.exitInFlight) {
+    if (this.exitBlocked()) {
       return this.none();
     }
     if (px <= 0) {
@@ -882,7 +900,7 @@ export class StrategyV011Engine {
 
   private onHoldEvent(event: StrategyMarketEvent): StrategyDecision {
     const cfg = this.cfg;
-    if (this.exitInFlight) {
+    if (this.exitBlocked()) {
       return this.none();
     }
     const px = event.price;

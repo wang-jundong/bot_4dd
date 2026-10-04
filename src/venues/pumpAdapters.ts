@@ -124,7 +124,9 @@ export class PumpBondingCurveAdapter extends PumpAdapterBase {
     this.#program = getPumpProgram(connection);
   }
   noteCurve(mint: string, curve: PumpCurveSnapshot): void {
-    this.#curves.set(mint, curve);
+    const previous = this.#curves.get(mint);
+    const feeRecipient = usableFeeRecipient(curve.feeRecipient) ?? previous?.feeRecipient;
+    this.#curves.set(mint, feeRecipient === curve.feeRecipient ? curve : { ...curve, feeRecipient });
   }
   parseFill(tx: unknown, owner: PublicKey, mint: string): FillResult {
     const parsed = tx as VersionedTransactionResponse;
@@ -167,7 +169,7 @@ export class PumpBondingCurveAdapter extends PumpAdapterBase {
       quoteMint: data.quoteMint?.toBase58() ?? previous?.quoteMint,
       protocolFeeBps: data.feeBasisPoints ? bn(data.feeBasisPoints) : previous?.protocolFeeBps ?? 0n,
       creatorFeeBps: data.creatorFeeBasisPoints ? bn(data.creatorFeeBasisPoints) : previous?.creatorFeeBps ?? 0n,
-      feeRecipient: data.feeRecipient?.toBase58() ?? previous?.feeRecipient,
+      feeRecipient: usableFeeRecipient(data.feeRecipient?.toBase58()) ?? previous?.feeRecipient,
       cashback: data.cashbackFeeBasisPoints ? !data.cashbackFeeBasisPoints.isZero() : previous?.cashback ?? false
     });
   }
@@ -179,10 +181,11 @@ export class PumpBondingCurveAdapter extends PumpAdapterBase {
     const tokenProgram = new PublicKey(descriptor.tokenProgram);
     const spendable = new BN(lamports.toString());
     const associatedUser = getAssociatedTokenAddressSync(mint, owner, true, tokenProgram);
+    const recipient = curveFeeRecipient(curve.feeRecipient);
     const buy = await this.#program.methods
       .buyExactSolIn(spendable, minTokensOut(quoteBuyTokens(spendable, curve), slippageBps), { 0: true })
       .accountsPartial({
-        feeRecipient: curve.feeRecipient ? new PublicKey(curve.feeRecipient) : feeRecipient(),
+        feeRecipient: recipient,
         mint,
         associatedUser,
         user: owner,
@@ -219,7 +222,7 @@ export class PumpBondingCurveAdapter extends PumpAdapterBase {
         solAmount: minSol.isNeg() ? new BN(0) : minSol,
         tokenProgram,
         cashback: curve.cashback,
-        ...(curve.feeRecipient ? { feeRecipient: new PublicKey(curve.feeRecipient) } : {})
+        feeRecipient: curveFeeRecipient(curve.feeRecipient)
       } as Parameters<typeof PUMP_SDK.getSellInstructionRaw>[0])
     ];
     return this.prepared(instructions, owner);
@@ -337,6 +340,19 @@ const BUYBACK_FEE_RECIPIENTS = [
   "5eHhjP8JaYkz83CWwvGU2uMUXefd3AazWGx4gpcuEEYD",
   "A7hAgCzFw14fejgCp387JUJRMNyz4j89JKnhtKU8piqW"
 ];
+
+const SYSTEM_PROGRAM_ID = SystemProgram.programId.toBase58();
+
+/** Blank trade events decode feeRecipient as the System Program. That account cannot be writable, so pump sell fails with ConstraintMut (2000). */
+function usableFeeRecipient(address: string | undefined): string | undefined {
+  if (!address || address === SYSTEM_PROGRAM_ID) return undefined;
+  return address;
+}
+
+function curveFeeRecipient(address: string | undefined): PublicKey {
+  const usable = usableFeeRecipient(address);
+  return usable ? new PublicKey(usable) : feeRecipient();
+}
 
 function feeRecipient(): PublicKey {
   return new PublicKey(FEE_RECIPIENTS[Math.floor(Math.random() * FEE_RECIPIENTS.length)]!);

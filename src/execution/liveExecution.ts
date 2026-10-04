@@ -235,6 +235,7 @@ export class LiveStrategyExecution implements StrategyExecution {
     try { if (state.lifecycle === TokenLifecycleState.SELL_PREPARED) state.transition(TokenLifecycleState.POSITION_ACTIVE_CONFIRMED); } catch {}
     state.releaseSellSend();
     state.preparedSell = undefined;
+    this.#strategy?.onSellFailed?.(state);
     const err = error instanceof Error ? error.message : String(error);
     this.journal.record({ strategy: this.strategyName, event: "sell_retry_exhausted", descriptor: state.descriptor, lifecycle: state.lifecycle, actualTokenAmount: state.actualTokenAmount, actualEntrySolAmount: state.actualEntrySolAmount, prices: state.prices, entryProcessedMs: state.entryProcessedMs, reason, error: err });
     this.logger.error({ err, reason, mint: state.descriptor.mint }, "[08 EXIT] Sell retries exhausted; position still monitored");
